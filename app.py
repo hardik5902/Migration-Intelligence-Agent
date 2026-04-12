@@ -37,8 +37,12 @@ query = st.text_area(
 )
 
 if st.button("Run pipeline", type="primary"):
-    if not os.environ.get("GOOGLE_API_KEY"):
-        st.error("Set GOOGLE_API_KEY in a `.env` file (see `.env.example`).")
+    # Check for either Vertex AI or direct API key auth
+    has_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE" and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    has_api_key = os.environ.get("GOOGLE_API_KEY")
+    
+    if not (has_vertex_ai or has_api_key):
+        st.error("Configure authentication: set GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI in `.env` (for Vertex AI) OR set GOOGLE_API_KEY (for direct API). See `.env.example`.")
     else:
         hint = query.strip()
         hint = (

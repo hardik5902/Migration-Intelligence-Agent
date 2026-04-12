@@ -72,8 +72,12 @@ async def run_migration_pipeline(
     year_to: int | None = None,
 ) -> dict[str, Any]:
     """Execute the root SequentialAgent once and return session state snapshots."""
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise RuntimeError("GOOGLE_API_KEY is required (see .env.example).")
+    # Check for either Vertex AI or direct API key authentication
+    has_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE" and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    has_api_key = os.environ.get("GOOGLE_API_KEY")
+    
+    if not (has_vertex_ai or has_api_key):
+        raise RuntimeError("Authentication required: set GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI (for Vertex AI) OR GOOGLE_API_KEY (for direct API). See .env.example")
 
     message = _compose_user_message(user_query, year_from, year_to)
 
