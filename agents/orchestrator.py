@@ -1,0 +1,106 @@
+"""Google ADK SequentialAgent pipeline: intent → scout → EDA → hypothesis."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from google.adk.agents.llm_agent import Agent
+from google.adk.agents.sequential_agent import SequentialAgent
+from google.adk.runners import Runner
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.genai import types
+
+from agents.hypothesis_agent import build_hypothesis_agent
+from agents.prompts import INTENT_CLASSIFIER_INSTRUCTION
+from agents.workflow_agents import ParallelEdaAgent, ScoutDataAgent
+from models.schemas import IntentConfig
+
+
+def build_root_agent() -> SequentialAgent:
+    intent_classifier = Agent(
+        name="intent_classifier",
+        model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        instruction=INTENT_CLASSIFIER_INSTRUCTION,
+        output_schema=IntentConfig,
+        output_key="intent_config",
+        description="Classifies query intent and parameters.",
+    )
+
+    scout_data_agent = ScoutDataAgent(
+        name="scout_data_agent",
+        description="Fetches UNHCR, World Bank, ACLED, Teleport, news, climate, employment, AQI into DuckDB-backed dataset.",
+    )
+
+    parallel_eda = ParallelEdaAgent(
+        name="parallel_eda_agent",
+        description="Runs correlation, destination, pattern, and relocation analyses in parallel.",
+    )
+
+    hypothesis_agent = build_hypothesis_agent()
+
+    return SequentialAgent(
+        name="migration_pipeline",
+        description="Migration intelligence multi-agent pipeline.",
+        sub_agents=[
+            intent_classifier,
+            scout_data_agent,
+            parallel_eda,
+            hypothesis_agent,
+        ],
+    )
+
+
+def _compose_user_message(
+    user_query: str,
+    year_from: int | None,
+    year_to: int | None,
+) -> str:
+    parts = [user_query.strip()]
+    if year_from is not None and year_to is not None:
+        parts.append(
+            f"USE_YEAR_RANGE: set year_from={year_from} and year_to={year_to} in IntentConfig."
+        )
+    return "\n\n".join(parts)
+
+
+async def run_migration_pipeline(
+    user_query: str,
+    user_id: str = "local_user",
+    *,
+    year_from: int | None = None,
+    year_to: int | None = None,
+) -> dict[str, Any]:
+    """Execute the root SequentialAgent once and return session state snapshots."""
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise RuntimeError("GOOGLE_API_KEY is required (see .env.example).")
+
+    message = _compose_user_message(user_query, year_from, year_to)
+
+    root = build_root_agent()
+    session_service = InMemorySessionService()
+    runner = Runner(
+        app_name="migration_intel",
+        agent=root,
+        session_service=session_service,
+        auto_create_session=True,
+    )
+    session_id = "session_main"
+    async for _event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=types.Content(
+            role="user",
+            parts=[types.Part(text=message)],
+        ),
+    ):
+        pass
+
+    session = await session_service.get_session(
+        app_name="migration_intel",
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if not session:
+        return {}
+    return dict(session.state)
