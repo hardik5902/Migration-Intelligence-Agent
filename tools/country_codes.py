@@ -58,6 +58,7 @@ _NAME_TO_ISO3: dict[str, str] = {
     "japan": "JPN",
     "south korea": "KOR",
     "korea": "KOR",
+    "antarctica": "ATA",
 }
 
 
@@ -96,5 +97,29 @@ def iso3_to_iso2(iso3: str) -> str | None:
         "FRA": "FR",
         "UKR": "UA",
         "AFG": "AF",
+        "ESP": "ES",
+        "ITA": "IT",
+        "CAN": "CA",
+        "AUS": "AU",
+        "JPN": "JP",
+        "KOR": "KR",
+        "NZL": "NZ",
+        "FIN": "FI",
+        "NOR": "NO",
+        "SWE": "SE",
+        "CHE": "CH",
+        "NLD": "NL",
+        "DNK": "DK",
+        "IRL": "IE",
+        "SGP": "SG",
+        "ATA": "AQ",
     }
     return m.get(iso3.upper())
+
+
+def iso3_to_name(iso3: str) -> str | None:
+    code = iso3.upper()
+    for name, value in _NAME_TO_ISO3.items():
+        if value == code and len(name) > 3:
+            return " ".join(part.capitalize() for part in name.split())
+    return None

@@ -52,10 +52,29 @@ def run_destination_tracker(
 
     top = scored[0].country if scored else ""
     anomaly = ""
+    target = (intent.target_country or dataset.target_country or "").strip()
     if len(scored) >= 2:
         anomaly = (
             f"{top} leads absorption ({scored[0].share_of_outflow:.0%} of tracked flow in this slice) "
             f"while secondary hubs differ in distance and income context — validate with GDP join in production."
+        )
+    if target:
+        target_match = next((row for row in scored if row.country.lower() == target.lower()), None)
+        if target_match is None:
+            return DestinationResult(
+                top_destinations=scored,
+                anomaly_note=(
+                    f"Requested destination '{target}' does not appear in the observed destination breakdown "
+                    f"for {dataset.country or intent.country}. The data does not support a meaningful migration corridor."
+                ),
+                narrative=(
+                    f"No material UNHCR-style destination evidence found for the route "
+                    f"{dataset.country or intent.country} → {target}."
+                ),
+            )
+        anomaly = (
+            f"Requested destination '{target}' is present but not dominant, representing "
+            f"{target_match.share_of_outflow:.0%} of the tracked outflow."
         )
 
     return DestinationResult(

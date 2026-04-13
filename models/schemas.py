@@ -85,6 +85,18 @@ class ChartPanel(BaseModel):
     data_sources: list[str] = Field(default_factory=list)
 
 
+class ToolCall(BaseModel):
+    tool_name: str
+    params: dict[str, str] = Field(default_factory=dict)
+    from_cache: bool = False
+    started_at: str | None = None
+    finished_at: str | None = None
+    rows_returned: int | None = None
+    endpoint_url: str | None = None
+    source_api: str | None = None
+    error: str | None = None
+
+
 class IntentConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -97,6 +109,8 @@ class IntentConfig(BaseModel):
     ] = "push_factor"
     country: str = ""
     country_code: str = ""
+    target_country: str = ""
+    target_country_code: str = ""
     year_from: int = 2010
     year_to: int = 2023
     weights: dict[str, float] = Field(
@@ -104,6 +118,7 @@ class IntentConfig(BaseModel):
             "aqi": 0.4,
             "healthcare": 0.35,
             "education": 0.25,
+            "safety": 0.3,
             "cost_of_living": 0.0,
         }
     )
@@ -115,6 +130,8 @@ class MigrationDataset(BaseModel):
 
     country: str = ""
     country_code: str = ""
+    target_country: str = ""
+    target_country_code: str = ""
     year_from: int = 2010
     year_to: int = 2023
     intent: str = "push_factor"
@@ -130,6 +147,9 @@ class MigrationDataset(BaseModel):
     aqi: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     data_freshness: dict[str, str] = Field(default_factory=dict)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    top_headline: str | None = None
+    missing_reasons: list[str] = Field(default_factory=list)
 
 
 class PushFactorResult(BaseModel):
@@ -162,6 +182,9 @@ class RelocationRow(BaseModel):
     pm25: float | None = None
     healthcare_signal: float | None = None
     education_signal: float | None = None
+    safety_signal: float | None = None
+    cost_of_living_signal: float | None = None
+    salary_signal: float | None = None
 
 
 class RelocationResult(BaseModel):

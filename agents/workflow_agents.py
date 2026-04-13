@@ -92,6 +92,8 @@ class ParallelEdaAgent(BaseAgent):
             {
                 "country": dataset.country,
                 "country_code": dataset.country_code,
+                "target_country": dataset.target_country,
+                "target_country_code": dataset.target_country_code,
                 "citations": [c.model_dump(mode="json") for c in dataset.citations[:40]],
                 "data_freshness": dataset.data_freshness,
                 "row_counts": {
@@ -100,6 +102,12 @@ class ParallelEdaAgent(BaseAgent):
                     "news": len(dataset.news),
                     "climate": len(dataset.climate),
                     "aqi": len(dataset.aqi),
+                },
+                "sample_rows": {
+                    "destinations": dataset.destinations[:5],
+                    "news": dataset.news[:3],
+                    "aqi": dataset.aqi[:5],
+                    "worldbank": dataset.worldbank[:5],
                 },
             },
             default=str,

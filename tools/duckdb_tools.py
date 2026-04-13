@@ -90,6 +90,7 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS city_scores (
+            country VARCHAR,
             slug VARCHAR,
             category VARCHAR,
             score_out_of_10 DOUBLE,
@@ -119,6 +120,8 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             year INTEGER,
             avg_daily_max_temp_c DOUBLE,
             annual_precipitation_mm DOUBLE,
+            avg_temp_anomaly_c DOUBLE,
+            extreme_heat_days DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
             cache_key VARCHAR
@@ -131,6 +134,8 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             country VARCHAR,
             year INTEGER,
             unemployment_rate DOUBLE,
+            youth_unemployment_rate DOUBLE,
+            labor_force_participation DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
             cache_key VARCHAR
@@ -142,6 +147,7 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         CREATE TABLE IF NOT EXISTS aqi_data (
             country VARCHAR,
             location VARCHAR,
+            city VARCHAR,
             pm25 DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
@@ -149,6 +155,12 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         );
         """
     )
+    con.execute("ALTER TABLE city_scores ADD COLUMN IF NOT EXISTS country VARCHAR;")
+    con.execute("ALTER TABLE climate_data ADD COLUMN IF NOT EXISTS avg_temp_anomaly_c DOUBLE;")
+    con.execute("ALTER TABLE climate_data ADD COLUMN IF NOT EXISTS extreme_heat_days DOUBLE;")
+    con.execute("ALTER TABLE employment_data ADD COLUMN IF NOT EXISTS youth_unemployment_rate DOUBLE;")
+    con.execute("ALTER TABLE employment_data ADD COLUMN IF NOT EXISTS labor_force_participation DOUBLE;")
+    con.execute("ALTER TABLE aqi_data ADD COLUMN IF NOT EXISTS city VARCHAR;")
 
 
 def _connect() -> duckdb.DuckDBPyConnection:

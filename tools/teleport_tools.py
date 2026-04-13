@@ -57,6 +57,7 @@ async def get_city_scores(
                 continue
             rows.append(
                 {
+                    "country": city_or_country_hint,
                     "category": cat.get("name", ""),
                     "score_out_of_10": float(cat.get("score_out_of_10") or 0),
                     "slug": slug,

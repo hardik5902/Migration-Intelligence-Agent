@@ -7,129 +7,272 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from models.schemas import Citation, IntentConfig, MigrationDataset
+from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall
 from tools import aqi_tools, climate_tools, employment_tools, news_tools, teleport_tools, unhcr_tools, worldbank_tools
 from tools import acled_tools
-from tools.country_codes import country_name_to_iso3, iso3_to_iso2
+from tools.country_codes import country_name_to_iso3, iso3_to_iso2, iso3_to_name
 from tools.duckdb_tools import cache_key, replace_table_rows, run_sql_query, should_use_cache
 
 
 async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
     """Fetch (or load TTL cache) all configured sources."""
-    code = intent.country_code or country_name_to_iso3(intent.country) or "USA"
-    name = intent.country or code
+    code = intent.country_code or country_name_to_iso3(intent.country) or ""
+    name = intent.country or iso3_to_name(code) or code
+    target_code = intent.target_country_code or country_name_to_iso3(intent.target_country) or ""
+    target_name = intent.target_country or iso3_to_name(target_code) or target_code
     y0, y1 = intent.year_from, intent.year_to
     ck = cache_key(code, y0, y1)
 
+    if not code and intent.intent != "relocation_advisory":
+        return MigrationDataset(
+            country=name,
+            country_code=code,
+            target_country=target_name,
+            target_country_code=target_code,
+            year_from=y0,
+            year_to=y1,
+            intent=intent.intent,
+        )
+
     citations: list[Citation] = []
     fresh: dict[str, str] = {}
+    tool_calls: list[ToolCall] = []
 
     async with httpx.AsyncClient(timeout=120.0) as client:
 
         async def eco():
-            if should_use_cache("economic_indicators", ck):
-                rows = run_sql_query(
-                    f"SELECT * FROM economic_indicators WHERE cache_key = '{ck}'"
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("economic_indicators", ck):
+                    rows = run_sql_query(
+                        f"SELECT * FROM economic_indicators WHERE cache_key = '{ck}'"
+                    )
+                    from_cache = True
+                    urls = []
+                else:
+                    rows, urls = await worldbank_tools.fetch_macro_bundle(code, y0, y1, client)
+                    # fetch_macro_bundle may append ERROR:... entries into urls for
+                    # per-indicator diagnostics; separate them out into an error string
+                    errors = [u for u in urls if isinstance(u, str) and u.startswith("ERROR:")]
+                    # keep only real endpoint urls
+                    urls = [u for u in urls if not (isinstance(u, str) and u.startswith("ERROR:"))]
+                    err_str = "; ".join(errors) if errors else None
+                    from_cache = False
+                    replace_table_rows(
+                        "economic_indicators",
+                        ck,
+                        rows,
+                        ["country", "year", "indicator", "value", "label", "endpoint_url", "fetched_at"],
+                    )
+                if rows:
+                    fresh["World Bank"] = str(rows[0].get("fetched_at", ""))
+                return rows, urls
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="worldbank.fetch_macro_bundle",
+                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="World Bank API",
+                        error=locals().get('err_str', None) or None,
+                    )
                 )
-                return rows, []
-            rows, urls = await worldbank_tools.fetch_macro_bundle(code, y0, y1, client)
-            replace_table_rows(
-                "economic_indicators",
-                ck,
-                rows,
-                ["country", "year", "indicator", "value", "label", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["World Bank"] = str(rows[0].get("fetched_at", ""))
-            return rows, urls
 
         async def disp():
-            if should_use_cache("displacement_data", ck):
-                return run_sql_query(
-                    f"SELECT * FROM displacement_data WHERE cache_key = '{ck}'"
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("displacement_data", ck):
+                    rows = run_sql_query(f"SELECT * FROM displacement_data WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    rows, _url = await unhcr_tools.get_displacement_data(code, y0, y1, client)
+                    from_cache = False
+                    replace_table_rows(
+                        "displacement_data",
+                        ck,
+                        rows,
+                        [
+                            "country",
+                            "year",
+                            "metric",
+                            "value",
+                            "coa",
+                            "coa_name",
+                            "endpoint_url",
+                            "fetched_at",
+                        ],
+                    )
+                if rows:
+                    fresh["UNHCR"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="unhcr.get_displacement_data",
+                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="UNHCR API",
+                    )
                 )
-            rows, _url = await unhcr_tools.get_displacement_data(code, y0, y1, client)
-            replace_table_rows(
-                "displacement_data",
-                ck,
-                rows,
-                [
-                    "country",
-                    "year",
-                    "metric",
-                    "value",
-                    "coa",
-                    "coa_name",
-                    "endpoint_url",
-                    "fetched_at",
-                ],
-            )
-            if rows:
-                fresh["UNHCR"] = str(rows[0].get("fetched_at", ""))
-            return rows
 
         async def city():
-            if should_use_cache("city_scores", ck):
-                return run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ck}'")
-            rows, _ = await teleport_tools.get_city_scores(name, client)
-            replace_table_rows(
-                "city_scores",
-                ck,
-                rows,
-                ["slug", "category", "score_out_of_10", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["Teleport"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("city_scores", ck):
+                    rows = run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    rows, _ = await teleport_tools.get_city_scores(name, client)
+                    from_cache = False
+                    replace_table_rows(
+                        "city_scores",
+                        ck,
+                        rows,
+                        ["country", "slug", "category", "score_out_of_10", "endpoint_url", "fetched_at"],
+                    )
+                if rows:
+                    fresh["Teleport"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="teleport.get_city_scores",
+                        params={"query": name},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="Teleport API",
+                    )
+                )
 
         async def news_c():
-            if should_use_cache("news_articles", ck):
-                return run_sql_query(f"SELECT * FROM news_articles WHERE cache_key = '{ck}'")
-            rows, _ = await news_tools.get_country_news(name, None, client)
-            replace_table_rows(
-                "news_articles",
-                ck,
-                rows,
-                ["country", "title", "source", "published_at", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["NewsAPI"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("news_articles", ck):
+                    rows = run_sql_query(f"SELECT * FROM news_articles WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    rows, _ = await news_tools.get_country_news(name, None, client)
+                    from_cache = False
+                    replace_table_rows(
+                        "news_articles",
+                        ck,
+                        rows,
+                        ["country", "title", "source", "published_at", "endpoint_url", "fetched_at"],
+                    )
+                if rows:
+                    fresh["NewsAPI"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="news.get_country_news",
+                        params={"query": name},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="NewsAPI",
+                    )
+                )
 
         async def clim():
-            if should_use_cache("climate_data", ck):
-                return run_sql_query(f"SELECT * FROM climate_data WHERE cache_key = '{ck}'")
-            rows, _ = await climate_tools.get_climate_data(code, y0, y1, client)
-            replace_table_rows(
-                "climate_data",
-                ck,
-                rows,
-                [
-                    "country",
-                    "year",
-                    "avg_daily_max_temp_c",
-                    "annual_precipitation_mm",
-                    "endpoint_url",
-                    "fetched_at",
-                ],
-            )
-            if rows:
-                fresh["Open-Meteo"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("climate_data", ck):
+                    rows = run_sql_query(f"SELECT * FROM climate_data WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    rows, _ = await climate_tools.get_climate_data(code, y0, y1, client)
+                    from_cache = False
+                    replace_table_rows(
+                        "climate_data",
+                        ck,
+                        rows,
+                        [
+                            "country",
+                            "year",
+                            "avg_daily_max_temp_c",
+                            "annual_precipitation_mm",
+                            "avg_temp_anomaly_c",
+                            "extreme_heat_days",
+                            "endpoint_url",
+                            "fetched_at",
+                        ],
+                    )
+                if rows:
+                    fresh["Open-Meteo"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="open-meteo.get_climate_data",
+                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="Open-Meteo",
+                    )
+                )
 
         async def emp():
-            if should_use_cache("employment_data", ck):
-                return run_sql_query(f"SELECT * FROM employment_data WHERE cache_key = '{ck}'")
-            rows, _ = await employment_tools.get_employment_data(code, y0, y1, client)
-            replace_table_rows(
-                "employment_data",
-                ck,
-                rows,
-                ["country", "year", "unemployment_rate", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["Employment"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("employment_data", ck):
+                    rows = run_sql_query(f"SELECT * FROM employment_data WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    rows, _ = await employment_tools.get_employment_data(code, y0, y1, client)
+                    from_cache = False
+                    replace_table_rows(
+                        "employment_data",
+                        ck,
+                        rows,
+                        [
+                            "country",
+                            "year",
+                            "unemployment_rate",
+                            "youth_unemployment_rate",
+                            "labor_force_participation",
+                            "endpoint_url",
+                            "fetched_at",
+                        ],
+                    )
+                if rows:
+                    fresh["Employment"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="ilo.get_employment_data",
+                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="ILOSTAT",
+                    )
+                )
 
         async def conf():
             if should_use_cache("conflict_events", ck):
@@ -139,33 +282,68 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
             else:
                 d1 = f"{y0}-01-01"
             d2 = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            rows, _ = await acled_tools.get_conflict_events(code, d1, d2, client)
-            replace_table_rows(
-                "conflict_events",
-                ck,
-                rows,
-                ["country", "event_date", "fatalities", "event_type", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["ACLED"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                rows, _ = await acled_tools.get_conflict_events(code, d1, d2, client)
+                replace_table_rows(
+                    "conflict_events",
+                    ck,
+                    rows,
+                    ["country", "event_date", "fatalities", "event_type", "endpoint_url", "fetched_at"],
+                )
+                if rows:
+                    fresh["ACLED"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="acled.get_conflict_events",
+                        params={"country_code": code, "date_from": d1, "date_to": d2},
+                        from_cache=False,
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="ACLED API",
+                    )
+                )
 
         async def aqi_local():
-            if should_use_cache("aqi_data", ck):
-                return run_sql_query(f"SELECT * FROM aqi_data WHERE cache_key = '{ck}'")
-            iso2 = iso3_to_iso2(code) or code[:2]
-            rows, _ = await aqi_tools.get_aqi_by_country(iso2, 40, client)
-            for r in rows:
-                r["country"] = r.get("country") or iso2
-            replace_table_rows(
-                "aqi_data",
-                ck,
-                rows,
-                ["country", "location", "pm25", "endpoint_url", "fetched_at"],
-            )
-            if rows:
-                fresh["OpenAQ"] = str(rows[0].get("fetched_at", ""))
-            return rows
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("aqi_data", ck):
+                    rows = run_sql_query(f"SELECT * FROM aqi_data WHERE cache_key = '{ck}'")
+                    from_cache = True
+                else:
+                    iso2 = iso3_to_iso2(code) or code[:2]
+                    rows, _ = await aqi_tools.get_aqi_by_country(iso2, 40, client)
+                    for r in rows:
+                        r["country"] = r.get("country") or iso2
+                    from_cache = False
+                    replace_table_rows(
+                        "aqi_data",
+                        ck,
+                        rows,
+                        ["country", "location", "city", "pm25", "endpoint_url", "fetched_at"],
+                    )
+                if rows:
+                    fresh["OpenAQ"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="openaq.get_aqi_by_country",
+                        params={"country_iso2": iso3_to_iso2(code) or code[:2]},
+                        from_cache=locals().get('from_cache', False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
+                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        source_api="OpenAQ",
+                    )
+                )
 
         core = [eco(), disp(), city(), news_c(), clim(), emp()]
         extra = []
@@ -257,31 +435,99 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
         for k, v in sorted(df_co.items(), key=lambda x: -x[1])[:15]:
             destinations.append({"destination_country": k, "refugee_count": v})
 
+    # Fetch top headline for the top suggested destination (if any)
+    top_headline: str | None = None
+    if destinations:
+        suggested = destinations[0]["destination_country"]
+        try:
+            top_news_rows, _ = await news_tools.get_country_news(suggested, None, None)
+            if top_news_rows:
+                top_headline = top_news_rows[0].get("title") or None
+            tool_calls.append(
+                ToolCall(
+                    tool_name="news.get_country_news",
+                    params={"query": suggested},
+                    from_cache=False,
+                    started_at=datetime.now(timezone.utc).isoformat(),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    rows_returned=(len(top_news_rows) if top_news_rows else 0),
+                    endpoint_url=(top_news_rows[0].get("endpoint_url") if top_news_rows else None),
+                    source_api="NewsAPI",
+                )
+            )
+        except Exception:
+            # don't fail the whole collection for headline fetch
+            pass
+
     if intent.intent == "relocation_advisory":
-        refs = ["NZ", "FI", "NO", "SE", "CA", "DE"]
-        iso2o = iso3_to_iso2(code) or "IN"
+        refs = ["NZL", "FIN", "NOR", "SWE", "CAN", "DEU", "NLD", "CHE", "DNK", "IRL", "AUS", "SGP"]
         more: list = []
+        extra_world: list = []
+        extra_city: list = []
         async with httpx.AsyncClient(timeout=90.0) as c3:
-            for iso in [iso2o] + refs:
-                ckx = cache_key(iso, y0, y1)
+            for candidate in [code] + refs:
+                iso2 = iso3_to_iso2(candidate) or candidate[:2]
+                candidate_name = iso3_to_name(candidate) or candidate
+                ckx = cache_key(candidate, y0, y1)
                 if should_use_cache("aqi_data", ckx):
                     more.extend(run_sql_query(f"SELECT * FROM aqi_data WHERE cache_key = '{ckx}'"))
                 else:
-                    rows, _ = await aqi_tools.get_aqi_by_country(iso, 25, c3)
+                    rows, _ = await aqi_tools.get_aqi_by_country(iso2, 25, c3)
                     for r in rows:
-                        r["country"] = r.get("country") or iso
+                        r["country"] = r.get("country") or candidate
                     replace_table_rows(
                         "aqi_data",
                         ckx,
                         rows,
-                        ["country", "location", "pm25", "endpoint_url", "fetched_at"],
+                        ["country", "location", "city", "pm25", "endpoint_url", "fetched_at"],
                     )
                     more.extend(rows)
+                if should_use_cache("city_scores", ckx):
+                    extra_city.extend(run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ckx}'"))
+                else:
+                    city_rows, _ = await teleport_tools.get_city_scores(candidate_name, c3)
+                    replace_table_rows(
+                        "city_scores",
+                        ckx,
+                        city_rows,
+                        ["country", "slug", "category", "score_out_of_10", "endpoint_url", "fetched_at"],
+                    )
+                    extra_city.extend(city_rows)
+                if should_use_cache("economic_indicators", ckx):
+                    extra_world.extend(run_sql_query(f"SELECT * FROM economic_indicators WHERE cache_key = '{ckx}'"))
+                else:
+                    wb_rows, _ = await worldbank_tools.fetch_relocation_bundle(candidate, y0, y1, c3)
+                    replace_table_rows(
+                        "economic_indicators",
+                        ckx,
+                        wb_rows,
+                        ["country", "year", "indicator", "value", "label", "endpoint_url", "fetched_at"],
+                    )
+                    extra_world.extend(wb_rows)
         aqi_rows = more
+        city_rows.extend(extra_city)
+        world_rows.extend(extra_world)
+
+    # Compute missing reasons for diagnostic reporting
+    missing_reasons: list[str] = []
+    if not world_rows:
+        missing_reasons.append("no_economic_indicators")
+    if not disp_rows:
+        missing_reasons.append("no_displacement_data")
+    if not news_rows:
+        missing_reasons.append("no_news_headlines")
+    if not climate_rows:
+        missing_reasons.append("no_climate_data")
+    if not emp_rows:
+        missing_reasons.append("no_employment_data")
+    if intent.intent in ("relocation_advisory", "real_time") and not aqi_rows:
+        missing_reasons.append("no_aqi_data")
 
     ds = MigrationDataset(
         country=name,
         country_code=code,
+        target_country=target_name,
+        target_country_code=target_code,
         year_from=y0,
         year_to=y1,
         intent=intent.intent,
@@ -297,6 +543,9 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
         aqi=aqi_rows,
         citations=citations,
         data_freshness={**fresh, "GDELT": str(gd.get("fetched_at", ""))},
+        tool_calls=tool_calls,
+        top_headline=top_headline,
+        missing_reasons=missing_reasons,
     )
     return ds
 

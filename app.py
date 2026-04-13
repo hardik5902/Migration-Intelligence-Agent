@@ -1,132 +1,165 @@
-"""Streamlit UI for the Migration Intelligence Agent (Google ADK + Gemini)."""
+"""Flask frontend for the Migration Intelligence Agent."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
+from typing import Any
 
-import plotly.io as pio
-import streamlit as st
 from dotenv import load_dotenv
+from flask import Flask, render_template, request
+from plotly.io import from_json
 
 from agents.orchestrator import run_migration_pipeline
 from analysis.visualization import build_migration_panels
 from models.schemas import HypothesisReport
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 
-st.set_page_config(page_title="Migration Intelligence Agent", layout="wide")
-st.title("Migration Intelligence Agent")
-st.caption("Google ADK · Gemini · live UNHCR / World Bank / Open-Meteo / OpenAQ / News / GDELT (+ optional ACLED, NewsAPI)")
+app = Flask(__name__)
 
-with st.sidebar:
-    st.subheader("Controls")
-    year_from = st.slider("Year from", 2000, 2024, 2010)
-    year_to = st.slider("Year to", 2000, 2025, 2023)
-    override = st.text_input("Intent override (optional)", "")
-    aqi_w = st.slider("Relocation weight: AQI", 0.0, 1.0, 0.4)
-    health_w = st.slider("Relocation weight: healthcare", 0.0, 1.0, 0.35)
-    edu_w = st.slider("Relocation weight: education", 0.0, 1.0, 0.25)
 
-query = st.text_area(
-    "Your question",
-    value="Why are people leaving Venezuela?",
-    height=100,
-)
+def _auth_ready() -> bool:
+    has_vertex_ai = (
+        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE"
+        and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    has_api_key = bool(os.environ.get("GOOGLE_API_KEY"))
+    return bool(has_vertex_ai or has_api_key or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
 
-if st.button("Run pipeline", type="primary"):
-    # Check for either Vertex AI or direct API key auth
-    has_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE" and os.environ.get("GOOGLE_CLOUD_PROJECT")
-    has_api_key = os.environ.get("GOOGLE_API_KEY")
-    
-    if not (has_vertex_ai or has_api_key):
-        st.error("Configure authentication: set GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI in `.env` (for Vertex AI) OR set GOOGLE_API_KEY (for direct API). See `.env.example`.")
-    else:
-        hint = query.strip()
-        hint = (
-            f"{hint}\n\n[Context: analysis years {year_from}-{year_to}. "
-            f"Relocation weights if applicable — aqi:{aqi_w}, healthcare:{health_w}, education:{edu_w}]"
+
+def _normalize_chart(fig_json: str) -> dict[str, Any] | None:
+    try:
+        fig = from_json(fig_json)
+    except Exception:
+        return None
+    return fig.to_plotly_json()
+
+
+def _build_context(query: str | None = None) -> dict[str, Any]:
+    return {
+        "query": query or "",
+        "error": None,
+        "report": None,
+        "overview_chart": None,
+        "detail_charts": [],
+        "collection_summary": [],
+        "push_factor_result": {},
+        "destination_result": {},
+        "pattern_result": {},
+        "relocation_result": {},
+        "step_cards": [
+            {
+                "eyebrow": "Step 1",
+                "title": "Collect",
+                "body": (
+                    "The scout agent retrieves live migration, economic, climate, "
+                    "employment, news, AQI, and destination signals from the plan-defined "
+                    "sources and writes them into DuckDB-backed state."
+                ),
+            },
+            {
+                "eyebrow": "Step 2",
+                "title": "Explore And Analyze",
+                "body": (
+                    "Parallel EDA agents compute correlations, growth shifts, destination "
+                    "rankings, lag patterns, and relocation scoring using explicit tool-backed "
+                    "calculations over the collected dataset."
+                ),
+            },
+            {
+                "eyebrow": "Step 3",
+                "title": "Hypothesize",
+                "body": (
+                    "The hypothesis agent fuses the EDA outputs into a grounded report "
+                    "with evidence, competing explanations, confidence, and chart captions."
+                ),
+            },
+        ],
+    }
+
+
+@app.get("/")
+def index() -> str:
+    return render_template("index.html", **_build_context())
+
+
+@app.post("/analyze")
+def analyze() -> tuple[str, int] | str:
+    query = (request.form.get("query") or "").strip()
+    context = _build_context(query)
+
+    if not query:
+        context["error"] = "Enter a migration question before running the pipeline."
+        return render_template("index.html", **context), 400
+
+    if not _auth_ready():
+        context["error"] = (
+            "Authentication is not configured. Set GOOGLE_API_KEY or "
+            "GOOGLE_APPLICATION_CREDENTIALS in .env before running the pipeline."
         )
-        if override.strip():
-            hint = f"{hint}\n\n(User intent override: {override.strip()})"
-        with st.spinner("Collecting data…"):
-            pass
-        with st.spinner("Running ADK pipeline (intent → scout → EDA → hypothesis)…"):
-            try:
+        return render_template("index.html", **context), 400
 
-                async def _run():
-                    return await run_migration_pipeline(
-                        hint,
-                        year_from=year_from,
-                        year_to=year_to,
-                    )
+    try:
+        state = asyncio.run(run_migration_pipeline(query, year_from=None, year_to=None))
+    except Exception as exc:
+        context["error"] = f"Pipeline execution failed: {exc}"
+        return render_template("index.html", **context), 500
 
-                state = asyncio.run(_run())
-            except Exception as exc:
-                st.exception(exc)
-                state = {}
+    report_raw = state.get("hypothesis_report")
+    if not report_raw:
+        context["error"] = "The pipeline completed without a hypothesis report."
+        return render_template("index.html", **context), 500
 
-        md_raw = state.get("migration_dataset")
-        if isinstance(md_raw, dict):
-            try:
-                fig_json = build_migration_panels(md_raw)
-                fig = pio.from_json(fig_json)
-                st.subheader("Exploratory panels")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as exc:
-                st.warning(f"Chart build skipped: {exc}")
+    try:
+        report = HypothesisReport.model_validate(report_raw)
+    except Exception as exc:
+        context["error"] = f"Hypothesis report validation failed: {exc}"
+        return render_template("index.html", **context), 500
 
-        hyp_raw = state.get("hypothesis_report")
-        if hyp_raw:
-            try:
-                hyp = HypothesisReport.model_validate(hyp_raw)
-            except Exception:
-                hyp = None
-            if hyp:
-                st.subheader("Headline")
-                st.write(hyp.headline)
-                st.metric("Confidence", f"{hyp.confidence_score:.2f}")
-                if hyp.supporting_points:
-                    st.subheader("Supporting points")
-                    st.dataframe(
-                        [p.model_dump() for p in hyp.supporting_points],
-                        use_container_width=True,
-                    )
-                if hyp.citations:
-                    st.subheader("Citations")
-                    st.dataframe(
-                        [c.model_dump() for c in hyp.citations],
-                        use_container_width=True,
-                    )
-                if hyp.competing_hypotheses:
-                    st.subheader("Competing hypotheses")
-                    for ch in hyp.competing_hypotheses:
-                        with st.expander(ch.hypothesis):
-                            st.write("For:", ch.evidence_for)
-                            st.write("Against:", ch.evidence_against)
-                            st.caption(f"p={ch.probability_score:.2f}")
-                if hyp.recent_headlines:
-                    st.subheader("Headlines")
-                    for n in hyp.recent_headlines[:5]:
-                        st.markdown(f"**{n.title}** — _{n.source}_ ({n.sentiment_score:.2f})")
-                if hyp.charts:
-                    for panel in hyp.charts:
-                        try:
-                            st.plotly_chart(pio.from_json(panel.fig_json), use_container_width=True)
-                            st.caption(panel.caption)
-                        except Exception:
-                            pass
-                with st.expander("Full HypothesisReport JSON"):
-                    st.json(json.loads(hyp.model_dump_json()))
-        else:
-            st.info("No hypothesis_report in session state (pipeline may have failed early).")
+    overview_chart = None
+    dataset = state.get("migration_dataset")
+    if isinstance(dataset, dict):
+        try:
+            overview_chart = _normalize_chart(build_migration_panels(dataset))
+        except Exception:
+            overview_chart = None
 
-        with st.expander("Session state keys"):
-            st.json({k: type(v).__name__ for k, v in state.items()})
+    detail_charts = []
+    for panel in report.charts:
+        normalized = _normalize_chart(panel.fig_json)
+        if normalized:
+            detail_charts.append(
+                {
+                    "figure": normalized,
+                    "caption": panel.caption,
+                    "sources": panel.data_sources,
+                }
+            )
 
-st.markdown(
-    "---\nWeights from sidebar are passed into the query string when you use "
-    "**relocation** phrasing so the intent agent can pick them up."
-)
+    context.update(
+        {
+            "report": report,
+            "overview_chart": overview_chart,
+            "detail_charts": detail_charts,
+            "collection_summary": [
+                {"label": "World Bank", "value": len((dataset or {}).get("worldbank", [])) if isinstance(dataset, dict) else 0},
+                {"label": "UNHCR", "value": len((dataset or {}).get("displacement", [])) if isinstance(dataset, dict) else 0},
+                {"label": "OpenAQ", "value": len((dataset or {}).get("aqi", [])) if isinstance(dataset, dict) else 0},
+                {"label": "Open-Meteo", "value": len((dataset or {}).get("climate", [])) if isinstance(dataset, dict) else 0},
+                {"label": "ILO / labor", "value": len((dataset or {}).get("employment", [])) if isinstance(dataset, dict) else 0},
+                {"label": "News + GDELT", "value": len((dataset or {}).get("news", [])) if isinstance(dataset, dict) else 0},
+            ],
+            "push_factor_result": state.get("push_factor_result") or {},
+            "destination_result": state.get("destination_result") or {},
+            "pattern_result": state.get("pattern_result") or {},
+            "relocation_result": state.get("relocation_result") or {},
+        }
+    )
+    return render_template("index.html", **context)
+
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=8000, debug=True)

@@ -16,7 +16,7 @@ async def get_indicator(
     year_from: int,
     year_to: int,
     client: httpx.AsyncClient | None = None,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str, str | None]:
     """Fetch a single World Bank indicator time series.
 
     Returns (rows, endpoint_url) where each row has year, value, indicator.
@@ -28,10 +28,27 @@ async def get_indicator(
     )
     own = client is None
     c = client or httpx.AsyncClient(timeout=60.0)
+    data = None
+    error: str | None = None
     try:
-        r = await c.get(url)
-        r.raise_for_status()
-        data = r.json()
+        try:
+            r = await c.get(url)
+            # don't raise here — handle non-2xx gracefully and capture body
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # capture response text for diagnostics
+                try:
+                    body = r.text
+                except Exception:
+                    body = str(exc)
+                error = f"HTTP {r.status_code}: {body}"
+                data = None
+            else:
+                data = r.json()
+        except httpx.RequestError as exc:
+            error = f"RequestError: {exc}"
+            data = None
     finally:
         if own:
             await c.aclose()
@@ -54,7 +71,7 @@ async def get_indicator(
                     "fetched_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-    return rows, url
+    return rows, url, error
 
 
 async def fetch_macro_bundle(
@@ -77,11 +94,48 @@ async def fetch_macro_bundle(
     urls: list[str] = []
     try:
         for ind, _label in indicators.items():
-            rows, u = await get_indicator(code, ind, year_from, year_to, c)
+            rows, u, err = await get_indicator(country_code, ind, year_from, year_to, c)
             for row in rows:
                 row["label"] = indicators[ind]
             all_rows.extend(rows)
             urls.append(u)
+            if err:
+                # record per-indicator error strings alongside the url list so callers
+                # can surface diagnostic messages. We'll append a short marker.
+                urls.append(f"ERROR:{ind}:{err}")
+    finally:
+        if own:
+            await c.aclose()
+    return all_rows, urls
+
+
+async def fetch_relocation_bundle(
+    country_code: str,
+    year_from: int,
+    year_to: int,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Country-level indicators used for relocation ranking."""
+    indicators = {
+        "SH.XPD.CHEX.GD.ZS": "health_expenditure_gdp",
+        "SH.MED.PHYS.ZS": "physicians_per_1000",
+        "SE.XPD.TOTL.GD.ZS": "education_spend_gdp",
+        "NY.GDP.PCAP.CD": "gdp_per_capita_usd",
+        "SI.POV.NAHC": "poverty_headcount",
+    }
+    own = client is None
+    c = client or httpx.AsyncClient(timeout=60.0)
+    all_rows: list[dict[str, Any]] = []
+    urls: list[str] = []
+    try:
+        for indicator, label in indicators.items():
+            rows, url, err = await get_indicator(country_code, indicator, year_from, year_to, c)
+            for row in rows:
+                row["label"] = label
+            all_rows.extend(rows)
+            urls.append(url)
+            if err:
+                urls.append(f"ERROR:{indicator}:{err}")
     finally:
         if own:
             await c.aclose()
