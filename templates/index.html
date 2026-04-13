@@ -12,279 +12,176 @@
   </head>
   <body>
     <div class="page-shell">
+
+      <!-- ── Hero ─────────────────────────────────────────────────────────── -->
       <header class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Migration Intelligence Agent</p>
-          <h1>Live collection, explicit EDA, and grounded migration hypotheses.</h1>
+          <h1>Country comparison powered by live data.</h1>
           <p class="lede">
-            The workflow follows the plan: collect from real sources, analyze dynamically
-            with tool-backed EDA, then deliver a data-grounded hypothesis from the user prompt.
+            Ask a question about countries, migration, or quality of life.
+            The AI selects the right data tools, fetches live data for the K
+            best countries, builds 4 comparison charts, and delivers
+            3 evidence-backed insights.
           </p>
         </div>
-        <div class="hero-panel">
-          <div class="hero-stat">
-            <span>Framework</span>
-            <strong>Google ADK</strong>
+        <div class="hero-steps">
+          <div class="hero-step">
+            <span class="step-num">1</span>
+            <div>
+              <strong>LLM picks tools + countries</strong>
+              <p>Reads your query and selects the most relevant data sources and K countries.</p>
+            </div>
           </div>
-          <div class="hero-stat">
-            <span>Pattern</span>
-            <strong>Orchestrator + Parallel EDA</strong>
+          <div class="hero-step">
+            <span class="step-num">2</span>
+            <div>
+              <strong>Parallel data collection</strong>
+              <p>All selected tools fetch live data for each country simultaneously.</p>
+            </div>
           </div>
-          <div class="hero-stat">
-            <span>Flow</span>
-            <strong>Collect → EDA → Hypothesize</strong>
+          <div class="hero-step">
+            <span class="step-num">3</span>
+            <div>
+              <strong>4 charts · 3 insights</strong>
+              <p>Visual comparisons + 3 LLM-generated evidence points from the collected data.</p>
+            </div>
           </div>
         </div>
       </header>
 
-      <main>
-        <section class="query-panel">
-          <form action="{{ url_for('analyze') }}" method="post">
-            <label for="query">Ask a migration question</label>
-            <textarea id="query" name="query" rows="5" placeholder="Why are people leaving Venezuela?">{{ query }}</textarea>
-            <button type="submit">Run Full Analysis</button>
-          </form>
-          <p class="query-note">
-            Ask either a push-factor, destination, historical, real-time, or relocation question.
-            The system will collect live data first, run tool-backed EDA, and only then produce the final hypothesis.
-          </p>
-          {% if error %}
-          <div class="error-box">{{ error }}</div>
-          {% endif %}
-        </section>
-
-        <section class="step-grid">
-          {% for card in step_cards %}
-          <article class="step-card">
-            <p class="eyebrow">{{ card.eyebrow }}</p>
-            <h2>{{ card.title }}</h2>
-            <p>{{ card.body }}</p>
+      <!-- ── Tools showcase ───────────────────────────────────────────────── -->
+      <section class="tools-section">
+        <div class="section-heading">
+          <p class="eyebrow">Available Data Sources</p>
+          <h2>The AI picks from these tools based on your query</h2>
+        </div>
+        <div class="tools-grid">
+          {% for tool in tool_cards %}
+          <article class="tool-card">
+            <span class="tool-icon">{{ tool.icon }}</span>
+            <div class="tool-info">
+              <strong>{{ tool.name }}</strong>
+              <p>{{ tool.description }}</p>
+            </div>
           </article>
           {% endfor %}
+        </div>
+      </section>
+
+      <!-- ── Query panel ───────────────────────────────────────────────────── -->
+      <section class="query-panel">
+        <form action="{{ url_for('analyze') }}" method="post">
+          <label for="query">Ask about countries, migration, or quality of life</label>
+          <textarea
+            id="query"
+            name="query"
+            rows="4"
+            placeholder="e.g. Which 5 countries have the best quality of life for migrants?&#10;e.g. Compare economic stability in Germany, Canada and Australia&#10;e.g. Top 3 safest countries with clean air for relocation"
+          >{{ query }}</textarea>
+          <div class="query-footer">
+            <button type="submit" class="run-btn">Run Analysis</button>
+            <p class="query-hint">
+              Mention a number like <em>"top 3"</em> or <em>"compare 7 countries"</em> to set K
+              (default: 5). The AI chooses data sources automatically.
+            </p>
+          </div>
+        </form>
+        {% if error %}
+        <div class="error-box">{{ error }}</div>
+        {% endif %}
+      </section>
+
+      <!-- ── Results ───────────────────────────────────────────────────────── -->
+      {% if result %}
+      <section class="results-shell">
+
+        <!-- Result header: countries + tools + period -->
+        <section class="result-header">
+          <div class="result-meta-grid">
+            <div class="meta-block">
+              <p class="eyebrow">Countries Analysed</p>
+              <div class="chip-row">
+                {% for country in result.countries %}
+                <span class="chip chip-country">{{ country }}</span>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="meta-block">
+              <p class="eyebrow">Tools Used</p>
+              <div class="chip-row">
+                {% for tool in result.tools_used %}
+                <span class="chip chip-tool">{{ tool }}</span>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="meta-block meta-block-narrow">
+              <p class="eyebrow">Period</p>
+              <strong class="period-label">{{ result.year_from }} – {{ result.year_to }}</strong>
+            </div>
+          </div>
+          {% if result.query_focus %}
+          <p class="query-focus-text">{{ result.query_focus }}</p>
+          {% endif %}
         </section>
 
-        {% if report %}
-        <section class="report-shell">
-          <section class="headline-card">
-            <p class="eyebrow">Final Hypothesis</p>
-            <h2>{{ report.headline }}</h2>
-            <div class="metric-row">
-              <div class="metric">
-                <span>Confidence</span>
-                <strong>{{ "%.2f"|format(report.confidence_score) }}</strong>
-              </div>
-              <div class="metric">
-                <span>Template</span>
-                <strong>{{ report.historical_template or pattern_result.get("template", "n/a") }}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section class="collection-strip">
-            {% for item in collection_summary %}
-            <article class="collection-chip">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-            </article>
-            {% endfor %}
-          </section>
-
-          {% if overview_chart %}
-          <section class="chart-card">
-            <div class="section-heading">
-              <p class="eyebrow">Exploratory Data Analysis</p>
-              <h2>Cross-source overview</h2>
-            </div>
-            <div id="overview-chart" class="plot-surface"></div>
-          </section>
-          {% endif %}
-
-          <section class="analysis-grid">
-            <article class="analysis-card">
-              <p class="eyebrow">EDA Output</p>
-              <h2>Push Factor Analyst</h2>
-              <p>{{ push_factor_result.get("narrative", "No push-factor narrative returned.") }}</p>
-              {% if report.top_push_factors %}
-              <ul class="evidence-list">
-                {% for factor in report.top_push_factors[:5] %}
-                <li>{{ factor.name }}{% if factor.pearson_r is not none %} · r={{ "%.3f"|format(factor.pearson_r) }}{% endif %}</li>
-                {% endfor %}
-              </ul>
-              {% endif %}
-            </article>
-
-            <article class="analysis-card">
-              <p class="eyebrow">EDA Output</p>
-              <h2>Destination Tracker</h2>
-              <p>{{ destination_result.get("narrative", "No destination narrative returned.") }}</p>
-              {% if destination_result.get("anomaly_note") %}
-              <p class="analysis-note">{{ destination_result.get("anomaly_note") }}</p>
-              {% endif %}
-            </article>
-
-            <article class="analysis-card">
-              <p class="eyebrow">EDA Output</p>
-              <h2>Pattern Detective</h2>
-              <p>{{ pattern_result.get("narrative", "No historical comparison returned.") }}</p>
-            </article>
-
-            {% if relocation_result.get("active") %}
-            <article class="analysis-card">
-              <p class="eyebrow">EDA Output</p>
-              <h2>Relocation Scorer</h2>
-              <p>{{ relocation_result.get("narrative", "No relocation narrative returned.") }}</p>
-            </article>
-            {% endif %}
-          </section>
-
-          {% if report.supporting_points %}
-          <section class="insight-card">
-            <div class="section-heading">
-              <p class="eyebrow">Evidence</p>
-              <h2>Supporting points</h2>
-            </div>
-            <ul class="support-grid">
-              {% for point in report.supporting_points %}
-              <li>
-                <strong>{{ point.value }}</strong>
-                <span>{{ point.claim }}</span>
-              </li>
-              {% endfor %}
-            </ul>
-          </section>
-          {% endif %}
-
-          {% if detail_charts %}
-          <section class="chart-stack">
-            <div class="section-heading">
-              <p class="eyebrow">Visualization</p>
-              <h2>EDA-derived charts</h2>
-            </div>
-            {% for chart in detail_charts %}
+        <!-- 4 Charts in 2 × 2 grid -->
+        {% if charts %}
+        <section class="charts-section">
+          <div class="section-heading">
+            <p class="eyebrow">Data Visualisation</p>
+            <h2>Comparative analysis across countries</h2>
+          </div>
+          <div class="charts-grid">
+            {% for chart in charts %}
             <article class="chart-card">
-              <div id="detail-chart-{{ loop.index0 }}" class="plot-surface"></div>
-              <p class="chart-caption">{{ chart.caption }}</p>
-              {% if chart.sources %}
-              <p class="chart-sources">{{ chart.sources | join(" · ") }}</p>
-              {% endif %}
+              <div id="chart-{{ loop.index0 }}" class="plot-surface"></div>
             </article>
             {% endfor %}
-          </section>
-          {% endif %}
-
-          {% if report.competing_hypotheses %}
-          <section class="comparison-card">
-            <div class="section-heading">
-              <p class="eyebrow">Competing Explanations</p>
-              <h2>Alternatives tested against the evidence</h2>
-            </div>
-            <div class="comparison-grid">
-              {% for item in report.competing_hypotheses %}
-              <article>
-                <h3>{{ item.hypothesis }}</h3>
-                <p class="probability">Probability {{ "%.2f"|format(item.probability_score) }}</p>
-                <p><strong>Evidence for:</strong> {{ item.evidence_for | join("; ") }}</p>
-                <p><strong>Evidence against:</strong> {{ item.evidence_against | join("; ") }}</p>
-              </article>
-              {% endfor %}
-            </div>
-          </section>
-          {% endif %}
-
-          <section class="narrative-grid">
-            {% if report.primary_vs_alternatives %}
-            <article class="analysis-card">
-              <p class="eyebrow">Synthesis</p>
-              <h2>Primary vs alternatives</h2>
-              <p>{{ report.primary_vs_alternatives }}</p>
-            </article>
-            {% endif %}
-            {% if report.counter_argument %}
-            <article class="analysis-card">
-              <p class="eyebrow">Challenge</p>
-              <h2>Counter-argument</h2>
-              <p>{{ report.counter_argument }}</p>
-              {% if report.counter_rebuttal %}
-              <p class="analysis-note">{{ report.counter_rebuttal }}</p>
-              {% endif %}
-            </article>
-            {% endif %}
-          </section>
-
-          {% if relocation_result.get("top_countries") %}
-          <section class="sources-card">
-            <div class="section-heading">
-              <p class="eyebrow">Relocation Ranking</p>
-              <h2>Top candidate countries from the live scoring model</h2>
-            </div>
-            <div class="source-table">
-              {% for row in relocation_result.get("top_countries", [])[:8] %}
-              <article class="source-row">
-                <h3>{{ row.country }}</h3>
-                <p>
-                  Score {{ "%.3f"|format(row.weighted_score) }}
-                  {% if row.pm25 is not none %} · PM2.5 {{ row.pm25 }}{% endif %}
-                  {% if row.healthcare_signal is not none %} · Healthcare {{ row.healthcare_signal }}{% endif %}
-                  {% if row.safety_signal is not none %} · Safety {{ row.safety_signal }}{% endif %}
-                  {% if row.cost_of_living_signal is not none %} · Cost {{ row.cost_of_living_signal }}{% endif %}
-                </p>
-              </article>
-              {% endfor %}
-            </div>
-          </section>
-          {% endif %}
-
-          {% if report.citations %}
-          <section class="sources-card">
-            <div class="section-heading">
-              <p class="eyebrow">Lineage</p>
-              <h2>Evidence sources</h2>
-            </div>
-            <div class="source-table">
-              {% for citation in report.citations %}
-              <article class="source-row">
-                <h3>{{ citation.claim }}</h3>
-                <p>{{ citation.value }} · {{ citation.source_api }}{% if citation.indicator_code %} · {{ citation.indicator_code }}{% endif %}</p>
-                <a href="{{ citation.endpoint_url }}" target="_blank" rel="noreferrer">Open source endpoint</a>
-              </article>
-              {% endfor %}
-            </div>
-          </section>
-          {% endif %}
-
-          {% if report.recent_headlines %}
-          <section class="headline-feed">
-            <div class="section-heading">
-              <p class="eyebrow">Recent Signals</p>
-              <h2>Headline feed</h2>
-            </div>
-            <div class="headline-grid">
-              {% for item in report.recent_headlines %}
-              <article>
-                <h3>{{ item.title }}</h3>
-                <p>{{ item.source }}{% if item.published_at %} · {{ item.published_at }}{% endif %}</p>
-              </article>
-              {% endfor %}
-            </div>
-          </section>
-          {% endif %}
+          </div>
         </section>
         {% endif %}
-      </main>
-    </div>
 
-    {% if overview_chart %}
+        <!-- 3 Evidence insights -->
+        {% if result.evidences %}
+        <section class="evidence-section">
+          <div class="section-heading">
+            <p class="eyebrow">Key Findings</p>
+            <h2>3 evidence-backed insights</h2>
+          </div>
+          <div class="evidence-grid">
+            {% for ev in result.evidences %}
+            <article class="evidence-card">
+              <div class="evidence-num">{{ loop.index }}</div>
+              <div class="evidence-body">
+                <h3>{{ ev.title }}</h3>
+                <p class="evidence-value">{{ ev.value }}</p>
+                <p class="evidence-desc">{{ ev.description }}</p>
+                <span class="evidence-source">{{ ev.data_source }}</span>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+        {% endif %}
+
+      </section>
+      {% endif %}
+
+    </div><!-- /.page-shell -->
+
+    {% if charts %}
     <script>
-      Plotly.newPlot("overview-chart", {{ overview_chart.data | tojson }}, {{ overview_chart.layout | tojson }}, {responsive: true, displayModeBar: false});
+      const chartsData = {{ charts | tojson }};
+      chartsData.forEach((chart, i) => {
+        Plotly.newPlot(
+          `chart-${i}`,
+          chart.data,
+          chart.layout,
+          { responsive: true, displayModeBar: false }
+        );
+      });
     </script>
-    {% endif %}
-
-    {% if detail_charts %}
-      {% for chart in detail_charts %}
-      <script>
-        Plotly.newPlot("detail-chart-{{ loop.index0 }}", {{ chart.figure.data | tojson }}, {{ chart.figure.layout | tojson }}, {responsive: true, displayModeBar: false});
-      </script>
-      {% endfor %}
     {% endif %}
   </body>
 </html>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -128,7 +129,7 @@ async def fetch_macro_bundle(
     year_to: int,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """GDP growth, inflation (CPI), stability, unemployment, Gini in one bundle."""
+    """GDP growth, inflation (CPI), stability, unemployment, Gini — all fetched in parallel."""
     indicators = {
         "NY.GDP.MKTP.KD.ZG": "gdp_growth",
         "FP.CPI.TOTL.ZG": "inflation",
@@ -137,19 +138,25 @@ async def fetch_macro_bundle(
         "SI.POV.GINI": "gini",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=60.0)
-    all_rows: list[dict[str, Any]] = []
-    urls: list[str] = []
+    c = client or httpx.AsyncClient(timeout=12.0)
     try:
-        for ind, _label in indicators.items():
-            rows, u, err = await get_indicator(country_code, ind, year_from, year_to, c)
+        tasks = [
+            get_indicator(country_code, ind, year_from, year_to, c)
+            for ind in indicators
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_rows: list[dict[str, Any]] = []
+        urls: list[str] = []
+        for (ind, label), result in zip(indicators.items(), results):
+            if isinstance(result, Exception):
+                urls.append(f"ERROR:{ind}:{result}")
+                continue
+            rows, u, err = result
             for row in rows:
-                row["label"] = indicators[ind]
+                row["label"] = label
             all_rows.extend(rows)
             urls.append(u)
             if err:
-                # record per-indicator error strings alongside the url list so callers
-                # can surface diagnostic messages. We'll append a short marker.
                 urls.append(f"ERROR:{ind}:{err}")
     finally:
         if own:
@@ -163,7 +170,7 @@ async def fetch_relocation_bundle(
     year_to: int,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Country-level indicators used for relocation ranking."""
+    """Country-level indicators used for relocation ranking — fetched in parallel."""
     indicators = {
         "SH.XPD.CHEX.GD.ZS": "health_expenditure_gdp",
         "SH.MED.PHYS.ZS": "physicians_per_1000",
@@ -172,18 +179,26 @@ async def fetch_relocation_bundle(
         "SI.POV.NAHC": "poverty_headcount",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=60.0)
-    all_rows: list[dict[str, Any]] = []
-    urls: list[str] = []
+    c = client or httpx.AsyncClient(timeout=12.0)
     try:
-        for indicator, label in indicators.items():
-            rows, url, err = await get_indicator(country_code, indicator, year_from, year_to, c)
+        tasks = [
+            get_indicator(country_code, ind, year_from, year_to, c)
+            for ind in indicators
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_rows: list[dict[str, Any]] = []
+        urls: list[str] = []
+        for (ind, label), result in zip(indicators.items(), results):
+            if isinstance(result, Exception):
+                urls.append(f"ERROR:{ind}:{result}")
+                continue
+            rows, url, err = result
             for row in rows:
                 row["label"] = label
             all_rows.extend(rows)
             urls.append(url)
             if err:
-                urls.append(f"ERROR:{indicator}:{err}")
+                urls.append(f"ERROR:{ind}:{err}")
     finally:
         if own:
             await c.aclose()

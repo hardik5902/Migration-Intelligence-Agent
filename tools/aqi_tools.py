@@ -143,7 +143,7 @@ async def _fetch_worldbank_pm25(
     """
     url = WB_PM25_URL.format(code=country_iso3.upper())
     try:
-        r = await client.get(url, timeout=30.0)
+        r = await client.get(url, timeout=10.0)
         r.raise_for_status()
         payload = r.json()
     except httpx.HTTPStatusError as exc:
@@ -223,7 +223,7 @@ async def _fetch_openaq_v3(
             url,
             params=params,
             headers=_openaq_headers(),
-            timeout=30.0,
+            timeout=10.0,
         )
     except httpx.TimeoutException:
         logger.warning(f"[AQI/OpenAQ] Timeout for {iso2}")
@@ -335,7 +335,7 @@ async def get_aqi_by_country(
     Never raises. Returns ([], url) if both sources fail.
     """
     own_client = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=12.0)
 
     try:
         wb_rows, wb_url = await _fetch_worldbank_pm25(country_iso3, c)
@@ -386,7 +386,7 @@ async def get_aqi_for_relocation_ranking(
     ]
     """
     own_client = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=12.0)
 
     try:
         tasks = [

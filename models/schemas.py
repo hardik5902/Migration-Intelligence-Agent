@@ -208,6 +208,46 @@ class RelocationResult(BaseModel):
     narrative: str = ""
 
 
+class ToolSelectorOutput(BaseModel):
+    """LLM output: which tools to call and which countries to compare."""
+    model_config = ConfigDict(extra="ignore")
+
+    selected_tools: list[str] = Field(default_factory=list)
+    countries: list[str] = Field(default_factory=list)
+    country_codes: list[str] = Field(default_factory=list)
+    k: int = 5
+    query_focus: str = ""
+    year_from: int = 2015
+    year_to: int = 2023
+    reasoning: str = ""
+
+
+class Evidence(BaseModel):
+    """A single LLM-generated evidence insight backed by collected data."""
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = ""
+    value: str = ""
+    data_source: str = ""
+    description: str = ""
+
+
+class CountryComparisonResult(BaseModel):
+    """Final result of the country comparison pipeline."""
+    model_config = ConfigDict(extra="ignore")
+
+    query: str = ""
+    countries: list[str] = Field(default_factory=list)
+    country_codes: list[str] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    evidences: list[Evidence] = Field(default_factory=list)
+    summary: str = ""
+    chart_jsons: list[str] = Field(default_factory=list)
+    query_focus: str = ""
+    year_from: int = 2015
+    year_to: int = 2023
+
+
 class HypothesisReport(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

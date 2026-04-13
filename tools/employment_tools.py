@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -95,22 +96,22 @@ async def get_employment_data(
     year_to: int,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    """Labor-market series with official ILOSTAT first and WB fallback second."""
+    """Labor-market series: ILOSTAT first, then 3 World Bank indicators in parallel."""
     own = client is None
-    c = client or httpx.AsyncClient(timeout=60.0)
+    c = client or httpx.AsyncClient(timeout=12.0)
     try:
         rows, url = await _try_ilostat(country_code, year_from, year_to, c)
         if rows:
             return rows, url
 
-        unemployment_rows, url = await get_indicator(
-            country_code, "SL.UEM.TOTL.ZS", year_from, year_to, c
-        )
-        youth_rows, _ = await get_indicator(
-            country_code, "SL.UEM.1524.ZS", year_from, year_to, c
-        )
-        participation_rows, _ = await get_indicator(
-            country_code, "SL.TLF.CACT.ZS", year_from, year_to, c
+        # Fetch all three WB indicators concurrently instead of sequentially
+        (unemployment_rows, url, _), (youth_rows, _, _), (participation_rows, _, _) = (
+            await asyncio.gather(
+                get_indicator(country_code, "SL.UEM.TOTL.ZS", year_from, year_to, c),
+                get_indicator(country_code, "SL.UEM.1524.ZS", year_from, year_to, c),
+                get_indicator(country_code, "SL.TLF.CACT.ZS", year_from, year_to, c),
+                return_exceptions=False,
+            )
         )
 
         youth_by_year = {row["year"]: row["value"] for row in youth_rows}

@@ -55,7 +55,7 @@ async def collect_migration_dataset(
     fresh: dict[str, str] = {}
     tool_calls: list[ToolCall] = []
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=12.0) as client:
 
         async def eco():
             started = datetime.now(timezone.utc).isoformat()
@@ -483,6 +483,17 @@ async def collect_migration_dataset(
             tracker.log_tool_call("AQI", {"country_iso2": iso3_to_iso2(code) or code[:2]})
             tasks_dict["aqi_local"] = aqi_local()
 
+        # GDELT: run in parallel with other tools when news is enabled
+        if tools["news"]:
+            async def gdelt_t():
+                try:
+                    gd_result, _ = await news_tools.get_gdelt_sentiment(name, client)
+                    gd_result["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                    return gd_result
+                except Exception:
+                    return {}
+            tasks_dict["gdelt_t"] = gdelt_t()
+
         # Execute enabled tasks
         task_names = list(tasks_dict.keys())
         task_coros = list(tasks_dict.values())
@@ -511,8 +522,8 @@ async def collect_migration_dataset(
         emp_rows = _unwrap_list(results.get("emp")) if "emp" in results else []
         conflict_rows = _unwrap_list(results.get("conf")) if "conf" in results else []
         aqi_rows = _unwrap_list(results.get("aqi_local")) if "aqi_local" in results else []
-
-    gd, _gurl = await news_tools.get_gdelt_sentiment(name, None)
+        # GDELT now runs inside the gather — no separate sequential call needed
+        gd = _unwrap_dict(results.get("gdelt_t")) if "gdelt_t" in results else {}
 
     extra_disp: list = []
     if intent.intent == "historical":
@@ -723,6 +734,12 @@ def _unwrap_pair(res):
     if isinstance(res, Exception):
         return [], []
     return res[0], res[1]
+
+
+def _unwrap_dict(res) -> dict:
+    if isinstance(res, Exception) or not isinstance(res, dict):
+        return {}
+    return res
 
 
 def _unwrap_list(res):

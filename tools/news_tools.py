@@ -32,7 +32,7 @@ async def get_country_news(
         "apiKey": key,
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=10.0)
     rows: list[dict[str, Any]] = []
     built = NEWS_EVERYTHING
     try:
@@ -78,7 +78,7 @@ async def get_gdelt_sentiment(
         "format": "json",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=10.0)
     out: dict[str, Any] = {
         "avg_tone": 0.0,
         "article_count": 0,

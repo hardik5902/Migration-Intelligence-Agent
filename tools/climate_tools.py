@@ -75,7 +75,7 @@ async def get_climate_data(
         "daily": "temperature_2m_max,precipitation_sum",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=90.0)
+    c = client or httpx.AsyncClient(timeout=12.0)
     rows: list[dict[str, Any]] = []
     built = ARCHIVE
     try:
