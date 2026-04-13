@@ -230,6 +230,7 @@ class Evidence(BaseModel):
     value: str = ""
     data_source: str = ""
     description: str = ""
+    confidence: int = 50  # 0-100; assigned by LLM based on data completeness & recency
 
 
 class CountryComparisonResult(BaseModel):

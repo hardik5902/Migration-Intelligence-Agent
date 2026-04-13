@@ -283,6 +283,13 @@ async def _fetch_openaq_v3(
         pm25 = item.get("value")
         if pm25 is None:
             continue
+        # Reject physically impossible or sensor-error readings
+        try:
+            pm25 = float(pm25)
+        except (TypeError, ValueError):
+            continue
+        if pm25 < 0 or pm25 > 1000:
+            continue
 
         country_info = item.get("country") or {}
         country_code = country_info.get("code", iso2) if isinstance(country_info, dict) else iso2

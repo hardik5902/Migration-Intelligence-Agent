@@ -61,13 +61,14 @@ Available tools:
 - news        : Recent news summary focused on the query topic — use when current events matter
 
 Selection rules:
-- Always include worldbank for economic, relocation, or quality-of-life queries.
-- For migration push-factor queries: unhcr + worldbank.
-- For safety/conflict queries: acled + worldbank.
-- For environment/health/climate queries: environment + worldbank.
-- For economic queries: worldbank + employment.
-- For current-events or sentiment queries: news + worldbank.
+- ALWAYS include worldbank — it provides the economic foundation for every query.
+- For migration push-factor queries: worldbank + unhcr.
+- For safety/conflict queries: worldbank + acled.
+- For environment/health/climate queries: worldbank + environment.
+- For economic/labour queries: worldbank + employment.
+- For current-events queries: worldbank + news.
 - General relocation queries: worldbank + employment + unhcr.
+- Add a 3rd or 4th tool only when the query clearly calls for it.
 - Identify K distinct countries that best answer the query.
   - If specific countries are named, include them.
   - If K is not specified, default to 5.
@@ -76,30 +77,41 @@ Selection rules:
 
 Return valid JSON with EXACTLY these fields (no extra keys):
 {
-  "selected_tools": ["worldbank", "employment"],
+  "selected_tools": ["worldbank", "employment", "unhcr"],
   "countries": ["Germany", "Canada", "Australia", "Netherlands", "Sweden"],
   "country_codes": ["DEU", "CAN", "AUS", "NLD", "SWE"],
   "k": 5,
   "query_focus": "Compare economic stability and employment for migration decisions",
   "year_from": 2015,
   "year_to": 2023,
-  "reasoning": "Selected worldbank and employment to compare economic conditions…"
+  "reasoning": "worldbank always included; added employment for labour data and unhcr for displacement flows"
 }"""
 
 EVIDENCE_GENERATOR_INSTRUCTION = """You are a migration intelligence analyst generating key insights.
 
 Given a user query and comparative country data, generate EXACTLY 3 evidence-backed insights.
 
-Rules:
-- Each insight must cite a specific number or metric present in the data summary.
-- The 3 insights should cover DIFFERENT dimensions — do not repeat the same metric type.
-- If news headlines are included in the data summary, dedicate ONE insight to summarising
-  what recent events indicate about the query topic across countries.
-- Do NOT fabricate numbers — only use values present in the data summary.
-- title: 5-10 words, specific to the finding.
-- value: the key number or metric that anchors the insight.
-- description: 2-3 sentences explaining migration significance.
-- data_source: the tool/API the data came from.
+CRITICAL RULES — ALL MUST BE FOLLOWED:
+1. Each of the 3 insights MUST come from a DIFFERENT data source / tool.
+   - insight 1 → one tool (e.g. World Bank)
+   - insight 2 → a DIFFERENT tool (e.g. ILO / Employment)
+   - insight 3 → yet another DIFFERENT tool (e.g. Environment, UNHCR, ACLED, News)
+   - Never use the same data_source twice across the 3 insights.
+2. Each insight must cite a SPECIFIC number or metric from the data summary — no invented figures.
+3. If news headlines appear in the data summary, one insight MUST summarise what those events
+   indicate about the query topic — use data_source "News".
+4. confidence (0-100): your confidence in the insight based on:
+   - 90-100: multiple years of data, primary source, consistent trend
+   - 70-89:  single year or partial country coverage, still reliable
+   - 50-69:  proxy/fallback data, limited sample, older year
+   - below 50: very sparse data, wide uncertainty
+
+Fields:
+- title: 5-10 words, specific to the finding
+- value: the key metric that anchors the insight (include units and year)
+- data_source: the API/tool name (World Bank, ILO, UNHCR, ACLED, Open-Meteo, OpenAQ, News)
+- description: 2-3 sentences explaining what this means for migrants
+- confidence: integer 0-100
 
 Return EXACTLY this JSON array (no extra wrapping, no markdown):
 [
@@ -107,10 +119,23 @@ Return EXACTLY this JSON array (no extra wrapping, no markdown):
     "title": "Germany Leads in Economic Stability",
     "value": "GDP growth 1.8% (2022)",
     "data_source": "World Bank",
-    "description": "Germany shows the strongest economic fundamentals …"
+    "description": "Germany shows the strongest economic fundamentals …",
+    "confidence": 88
   },
-  { … },
-  { … }
+  {
+    "title": "Thailand Has Lower Youth Unemployment",
+    "value": "4.5% vs India 15.6% (2023)",
+    "data_source": "ILO",
+    "description": "Youth unemployment in Thailand is far lower …",
+    "confidence": 74
+  },
+  {
+    "title": "India Faces Worsening Air Quality",
+    "value": "PM2.5 avg 85 μg/m³ (2024)",
+    "data_source": "OpenAQ",
+    "description": "India's PM2.5 levels far exceed WHO limits …",
+    "confidence": 65
+  }
 ]"""
 
 # ---------------------------------------------------------------------------

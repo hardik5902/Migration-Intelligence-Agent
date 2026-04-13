@@ -18,45 +18,52 @@ COUNTRY_COLORS = [
 ]
 
 # ── Base layout shared by all charts ──────────────────────────────────────────
-def _base_layout(title: str, yaxis_title: str, source: str, height: int = 390) -> dict:
+def _base_layout(title: str, yaxis_title: str, source: str, height: int = 420) -> dict:
     return dict(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,253,248,0.9)",
         height=height,
-        margin=dict(l=52, r=16, t=60, b=52),
+        autosize=True,
+        margin=dict(l=64, r=24, t=52, b=90),
         font=dict(family="Space Grotesk, sans-serif", size=12, color="#1e1b18"),
         title=dict(
             text=title,
             font=dict(size=13, color="#1e1b18", family="Source Serif 4, serif"),
             x=0,
             xanchor="left",
-            pad=dict(l=4, b=8),
+            pad=dict(l=4, b=6),
         ),
         yaxis=dict(
             title=yaxis_title,
+            title_standoff=12,
+            automargin=True,
             gridcolor="rgba(30,27,24,0.07)",
             zerolinecolor="rgba(30,27,24,0.15)",
             tickfont=dict(size=11),
         ),
         xaxis=dict(
+            automargin=True,
             gridcolor="rgba(30,27,24,0.07)",
             zerolinecolor="rgba(30,27,24,0.15)",
             tickfont=dict(size=11),
         ),
         legend=dict(
             orientation="h",
-            yanchor="bottom",
-            y=1.02,
+            yanchor="top",
+            y=-0.18,
+            xanchor="left",
             x=0,
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
+            bgcolor="rgba(255,253,248,0.85)",
+            bordercolor="rgba(30,27,24,0.1)",
+            borderwidth=1,
+            font=dict(size=11),
         ),
         hoverlabel=dict(bgcolor="white", font_size=12, bordercolor="#e0d8cc"),
         annotations=[
             dict(
                 text=f"Source: {source}",
                 xref="paper", yref="paper",
-                x=1, y=-0.14,
+                x=1, y=-0.28,
                 xanchor="right", yanchor="top",
                 showarrow=False,
                 font=dict(size=9, color="#9b8f84"),
@@ -125,8 +132,13 @@ def _scalar_aqi(dataset: dict) -> float | None:
     aqi = pd.DataFrame(dataset.get("aqi") or [])
     if aqi.empty or "pm25" not in aqi.columns:
         return None
-    v = aqi["pm25"].dropna().mean()
-    return float(v) if pd.notna(v) and v > 0 else None
+    # Filter out corrupt readings (negative or impossibly high)
+    valid = aqi["pm25"].dropna()
+    valid = valid[(valid > 0) & (valid <= 1000)]
+    if valid.empty:
+        return None
+    v = valid.mean()
+    return float(v) if pd.notna(v) else None
 
 
 def _scalar_disp(dataset: dict) -> float | None:

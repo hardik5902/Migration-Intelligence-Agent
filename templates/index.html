@@ -281,7 +281,7 @@
           article.appendChild(div);
           grid.appendChild(article);
           Plotly.newPlot(`chart-${i}`, chart.data, chart.layout,
-            { responsive: true, displayModeBar: false });
+            { responsive: true, displayModeBar: false, displaylogo: false });
         });
         if (d.charts && d.charts.length) {
           show($('charts-panel'));
@@ -309,6 +309,9 @@
         const evGrid = $('evidence-grid');
         evGrid.innerHTML = '';
         (d.evidences || []).forEach((ev, i) => {
+          const conf = ev.confidence ?? 50;
+          const confClass = conf >= 80 ? 'conf-high' : conf >= 60 ? 'conf-med' : 'conf-low';
+          const confLabel = conf >= 80 ? 'High' : conf >= 60 ? 'Medium' : 'Low';
           const article = document.createElement('article');
           article.className = 'evidence-card';
           article.innerHTML = `
@@ -317,7 +320,13 @@
               <h3>${ev.title || ''}</h3>
               <p class="evidence-value">${ev.value || ''}</p>
               <p class="evidence-desc">${ev.description || ''}</p>
-              <span class="evidence-source">${ev.data_source || ''}</span>
+              <div class="evidence-footer">
+                <span class="evidence-source">${ev.data_source || ''}</span>
+                <span class="conf-badge ${confClass}">
+                  <span class="conf-bar-wrap"><span class="conf-bar" style="width:${conf}%"></span></span>
+                  ${conf}% · ${confLabel} confidence
+                </span>
+              </div>
             </div>`;
           evGrid.appendChild(article);
         });
