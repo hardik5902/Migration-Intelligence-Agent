@@ -1,4 +1,4 @@
-"""ACLED conflict data (requires API key + email)."""
+"""ACLED conflict data (OAuth authentication)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,29 @@ from typing import Any
 
 import httpx
 
-ACLED_READ = "https://api.acleddata.com/acled/read"
+ACLED_OAUTH_TOKEN = "https://acleddata.com/oauth/token"
+ACLED_READ = "https://acleddata.com/api/acled/read"
+
+
+async def _get_acled_token(client: httpx.AsyncClient) -> str | None:
+    """Get OAuth Bearer token using username/password."""
+    username = os.environ.get("ACLED_USERNAME", "")
+    password = os.environ.get("ACLED_PASSWORD", "")
+    if not username or not password:
+        return None
+    try:
+        data = {
+            "username": username,
+            "password": password,
+            "grant_type": "password",
+            "client_id": "acled",
+        }
+        r = await client.post(ACLED_OAUTH_TOKEN, data=data)
+        r.raise_for_status()
+        token_data = r.json()
+        return token_data.get("access_token")
+    except Exception:
+        return None
 
 
 async def get_conflict_events(
@@ -18,27 +40,30 @@ async def get_conflict_events(
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Fetch ACLED events for ISO3 country over a date range (YYYY-MM-DD)."""
-    key = os.environ.get("ACLED_API_KEY", "")
-    email = os.environ.get("ACLED_EMAIL", "")
-    if not key or not email:
-        return [], ACLED_READ
-    params = {
-        "key": key,
-        "email": email,
-        "iso": country_code.upper()[:3],
-        "event_date": f"{date_from}|{date_to}",
-        "event_date_where": "BETWEEN",
-        "limit": 500,
-    }
     own = client is None
     c = client or httpx.AsyncClient(timeout=90.0)
     rows: list[dict[str, Any]] = []
     built = ACLED_READ
     try:
-        r = await c.get(ACLED_READ, params=params)
+        # Get OAuth Bearer token
+        token = await _get_acled_token(c)
+        if not token:
+            return [], ACLED_READ
+        
+        # Build request parameters
+        params = {
+            "iso": country_code.upper()[:3],
+            "event_date": f"{date_from}|{date_to}",
+            "event_date_where": "BETWEEN",
+            "limit": 500,
+        }
+        
+        # Make API call with Bearer token
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await c.get(ACLED_READ, params=params, headers=headers)
         r.raise_for_status()
         data = r.json()
-        built = str(r.request.url)
+        built = str(r.request.url).replace(token, "REDACTED")
         records = data.get("data", []) if isinstance(data, dict) else []
         for ev in records:
             if not isinstance(ev, dict):

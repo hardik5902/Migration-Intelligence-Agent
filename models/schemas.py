@@ -125,6 +125,21 @@ class IntentConfig(BaseModel):
     api_priority: list[str] = Field(default_factory=list)
 
 
+class ToolSelection(BaseModel):
+    """Smart router decision: which tools to call based on query analysis."""
+    model_config = ConfigDict(extra="ignore")
+    
+    worldbank: bool = True
+    unhcr: bool = True
+    acled: bool = False
+    teleport: bool = True
+    news: bool = False
+    climate: bool = True
+    employment: bool = False
+    aqi: bool = True
+    reasoning: str = ""
+
+
 class MigrationDataset(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

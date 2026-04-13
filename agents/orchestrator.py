@@ -29,19 +29,19 @@ def build_root_agent() -> SequentialAgent:
 
     scout_data_agent = ScoutDataAgent(
         name="scout_data_agent",
-        description="Fetches UNHCR, World Bank, ACLED, Teleport, news, climate, employment, AQI into DuckDB-backed dataset.",
+        description="Fetches data from all available sources (World Bank, UNHCR, ACLED, Teleport, News, Climate, Employment, AQI).",
     )
 
     parallel_eda = ParallelEdaAgent(
         name="parallel_eda_agent",
-        description="Runs correlation, destination, pattern, and relocation analyses in parallel.",
+        description="Runs EDA analyses (push factor, destination, pattern, relocation) with available data.",
     )
 
     hypothesis_agent = build_hypothesis_agent()
 
     return SequentialAgent(
         name="migration_pipeline",
-        description="Migration intelligence multi-agent pipeline.",
+        description="Migration intelligence pipeline: intent → collect all data → analyze → hypothesize.",
         sub_agents=[
             intent_classifier,
             scout_data_agent,

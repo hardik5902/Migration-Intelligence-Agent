@@ -24,8 +24,17 @@ def run_destination_tracker(
     intent: IntentConfig,
 ) -> DestinationResult:
     dests = dataset.destinations or []
+    
     if not dests:
-        return DestinationResult(narrative="No UNHCR destination breakdown available.")
+        # Provide context about why destination data is missing
+        missing_msg = "No UNHCR destination breakdown was available to identify top destinations."
+        if "no_displacement_data" in (dataset.missing_reasons or []):
+            missing_msg += " (Displacement data was not collected or is unavailable for this country.)"
+        
+        return DestinationResult(
+            narrative=missing_msg,
+            anomaly_note="Destination tracking requires UNHCR population data which was not available.",
+        )
     df = pd.DataFrame(dests).sort_values("refugee_count", ascending=False).head(10)
     origin = dataset.country_code.upper()[:3]
     ocap = _CAPS.get(origin, (10.0, 0.0))

@@ -29,20 +29,27 @@ async def get_displacement_data(
     c = client or httpx.AsyncClient(timeout=60.0)
     built_url = url
     payload: Any = {}
+    error_msg = None
     try:
-        r = await c.get(url, params=params)
+        r = await c.get(url, params=params, follow_redirects=True)
         r.raise_for_status()
         payload = r.json()
         built_url = str(r.request.url)
-    except Exception:
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[UNHCR] Error fetching data for {code}: {e}")
         payload = {}
     finally:
         if own:
             await c.aclose()
+    
     rows: list[dict[str, Any]] = []
     items = []
     if isinstance(payload, dict):
         items = payload.get("items") or payload.get("data") or []
+    
+    print(f"[UNHCR] Fetched {len(items)} items for {code} (coo={code}, {year_from}-{year_to})")
+    
     for it in items:
         if not isinstance(it, dict):
             continue
@@ -65,4 +72,10 @@ async def get_displacement_data(
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+    
+    if error_msg:
+        print(f"[UNHCR] Error details: {error_msg}")
+    if not rows:
+        print(f"[UNHCR] No displacement data available for {code} in {year_from}-{year_to}")
+    
     return rows, built_url

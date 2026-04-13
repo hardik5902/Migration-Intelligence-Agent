@@ -7,15 +7,32 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall
+from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall, ToolSelection
 from tools import aqi_tools, climate_tools, employment_tools, news_tools, teleport_tools, unhcr_tools, worldbank_tools
 from tools import acled_tools
 from tools.country_codes import country_name_to_iso3, iso3_to_iso2, iso3_to_name
 from tools.duckdb_tools import cache_key, replace_table_rows, run_sql_query, should_use_cache
+from agents.progress_tracker import get_tracker
 
 
-async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
-    """Fetch (or load TTL cache) all configured sources."""
+async def collect_migration_dataset(
+    intent: IntentConfig,
+    tool_selection: dict | None = None,
+) -> MigrationDataset:
+    """Fetch (or load TTL cache) selected sources based on tool_selection."""
+    # Parse tool selection (default: all on)
+    tools = {
+        "worldbank": True,
+        "unhcr": True,
+        "acled": True,
+        "teleport": True,
+        "news": True,
+        "climate": True,
+        "employment": True,
+        "aqi": True,
+    }
+    if tool_selection:
+        tools.update(tool_selection)
     code = intent.country_code or country_name_to_iso3(intent.country) or ""
     name = intent.country or iso3_to_name(code) or code
     target_code = intent.target_country_code or country_name_to_iso3(intent.target_country) or ""
@@ -132,7 +149,7 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
                     rows = run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _ = await teleport_tools.get_city_scores(name, client)
+                    rows, _ = await teleport_tools.get_city_scores(name, country_iso3=code, client=client)
                     from_cache = False
                     replace_table_rows(
                         "city_scores",
@@ -317,7 +334,7 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
                     from_cache = True
                 else:
                     iso2 = iso3_to_iso2(code) or code[:2]
-                    rows, _ = await aqi_tools.get_aqi_by_country(iso2, 40, client)
+                    rows, _ = await aqi_tools.get_aqi_by_country(code, country_iso2=iso2, top_n=40, client=client)
                     for r in rows:
                         r["country"] = r.get("country") or iso2
                     from_cache = False
@@ -345,33 +362,63 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
                     )
                 )
 
-        core = [eco(), disp(), city(), news_c(), clim(), emp()]
-        extra = []
-        if intent.intent in ("push_factor", "real_time", "historical"):
-            extra.append(conf())
-        if intent.intent in ("relocation_advisory", "real_time"):
-            extra.append(aqi_local())
+        # Build task dict: only execute enabled tools
+        tracker = get_tracker()
+        tasks_dict = {}
+        
+        if tools["worldbank"]:
+            tracker.log_tool_call("World Bank", {"country_code": code, "years": f"{y0}-{y1}"})
+            tasks_dict["eco"] = eco()
+        if tools["unhcr"]:
+            tracker.log_tool_call("UNHCR", {"country_code": code, "years": f"{y0}-{y1}"})
+            tasks_dict["disp"] = disp()
+        if tools["teleport"]:
+            tracker.log_tool_call("Teleport", {"query": name})
+            tasks_dict["city"] = city()
+        if tools["news"]:
+            tracker.log_tool_call("NewsAPI", {"query": name})
+            tasks_dict["news_c"] = news_c()
+        if tools["climate"]:
+            tracker.log_tool_call("Climate", {"country_code": code, "years": f"{y0}-{y1}"})
+            tasks_dict["clim"] = clim()
+        if tools["employment"]:
+            tracker.log_tool_call("Employment", {"country_code": code, "years": f"{y0}-{y1}"})
+            tasks_dict["emp"] = emp()
+        if tools["acled"]:
+            tracker.log_tool_call("ACLED", {"country_code": code, "date_range": f"{y0}-{y1}"})
+            tasks_dict["conf"] = conf()
+        if tools["aqi"]:
+            tracker.log_tool_call("AQI", {"country_iso2": iso3_to_iso2(code) or code[:2]})
+            tasks_dict["aqi_local"] = aqi_local()
 
-        bundled = await asyncio.gather(*core, *extra, return_exceptions=True)
-        n_core = len(core)
-        core_res = bundled[:n_core]
-        extra_res = bundled[n_core:]
+        # Execute enabled tasks
+        task_names = list(tasks_dict.keys())
+        task_coros = list(tasks_dict.values())
+        tracker.log_step(
+            stage="data_collection",
+            status="started",
+            details=f"Collecting data from {len(task_names)} sources: {', '.join(task_names)}",
+            metadata={"tools": task_names, "country": name, "code": code},
+        )
+        bundled = await asyncio.gather(*task_coros, return_exceptions=True) if task_coros else []
+        tracker.log_step(
+            stage="data_collection",
+            status="completed",
+            details=f"Collected data from {len(bundled)} sources",
+            metadata={"source_count": len(bundled)},
+        )
 
-        world_rows, _wb_urls = _unwrap_pair(core_res[0])
-        disp_rows = _unwrap_list(core_res[1])
-        city_rows = _unwrap_list(core_res[2])
-        news_rows = _unwrap_list(core_res[3])
-        climate_rows = _unwrap_list(core_res[4])
-        emp_rows = _unwrap_list(core_res[5])
+        # Unpack results using task names
+        results = {name: bundled[i] for i, name in enumerate(task_names)}
 
-        conflict_rows: list = []
-        aqi_rows: list = []
-        ei = 0
-        if intent.intent in ("push_factor", "real_time", "historical"):
-            conflict_rows = _unwrap_list(extra_res[ei])
-            ei += 1
-        if intent.intent in ("relocation_advisory", "real_time"):
-            aqi_rows = _unwrap_list(extra_res[ei])
+        world_rows, _wb_urls = _unwrap_pair(results.get("eco")) if "eco" in results else ([], [])
+        disp_rows = _unwrap_list(results.get("disp")) if "disp" in results else []
+        city_rows = _unwrap_list(results.get("city")) if "city" in results else []
+        news_rows = _unwrap_list(results.get("news_c")) if "news_c" in results else []
+        climate_rows = _unwrap_list(results.get("clim")) if "clim" in results else []
+        emp_rows = _unwrap_list(results.get("emp")) if "emp" in results else []
+        conflict_rows = _unwrap_list(results.get("conf")) if "conf" in results else []
+        aqi_rows = _unwrap_list(results.get("aqi_local")) if "aqi_local" in results else []
 
     gd, _gurl = await news_tools.get_gdelt_sentiment(name, None)
 
@@ -472,7 +519,7 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
                 if should_use_cache("aqi_data", ckx):
                     more.extend(run_sql_query(f"SELECT * FROM aqi_data WHERE cache_key = '{ckx}'"))
                 else:
-                    rows, _ = await aqi_tools.get_aqi_by_country(iso2, 25, c3)
+                    rows, _ = await aqi_tools.get_aqi_by_country(candidate, country_iso2=iso2, top_n=25, client=c3)
                     for r in rows:
                         r["country"] = r.get("country") or candidate
                     replace_table_rows(
@@ -485,7 +532,7 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
                 if should_use_cache("city_scores", ckx):
                     extra_city.extend(run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ckx}'"))
                 else:
-                    city_rows, _ = await teleport_tools.get_city_scores(candidate_name, c3)
+                    city_rows, _ = await teleport_tools.get_city_scores(candidate_name, country_iso3=candidate, client=c3)
                     replace_table_rows(
                         "city_scores",
                         ckx,
@@ -547,6 +594,22 @@ async def collect_migration_dataset(intent: IntentConfig) -> MigrationDataset:
         top_headline=top_headline,
         missing_reasons=missing_reasons,
     )
+    
+    # Debug output
+    print(f"\n[SCOUT] Data Collection Complete for {name} ({code}):")
+    print(f"  Displacement: {len(disp_rows + extra_disp)} rows")
+    print(f"  World Bank: {len(world_rows)} rows")
+    print(f"  Conflict Events: {len(conflict_rows)} rows")
+    print(f"  Climate: {len(climate_rows)} rows")
+    print(f"  AQI: {len(aqi_rows)} rows")
+    print(f"  News: {len(news_rows)} rows")
+    print(f"  Employment: {len(emp_rows)} rows")
+    print(f"  City Scores: {len(city_rows)} rows")
+    print(f"  Destinations: {len(destinations)} (from {len(disp_rows)} UNHCR rows)")
+    print(f"  Tool calls logged: {len(tool_calls)}")
+    print(f"  Missing data: {missing_reasons or 'none'}")
+    print()
+    
     return ds
 
 

@@ -30,12 +30,26 @@ def run_relocation_scorer(
     city = pd.DataFrame(dataset.city_scores or [])
     wb = pd.DataFrame(dataset.worldbank or [])
 
-    if aqi.empty or city.empty or wb.empty:
+    # Check what data is available
+    has_aqi = not aqi.empty and {"country", "pm25"}.issubset(aqi.columns)
+    has_city = not city.empty and {"country", "category", "score_out_of_10"}.issubset(city.columns)
+    has_wb = not wb.empty and {"country", "label", "value", "year"}.issubset(wb.columns)
+
+    # If completely missing all three required sources, fail gracefully
+    if not (has_aqi or has_city or has_wb):
+        reasons = []
+        if aqi.empty:
+            reasons.append("AQI data")
+        if city.empty:
+            reasons.append("Teleport quality-of-life scores")
+        if wb.empty:
+            reasons.append("World Bank economic indicators")
+        
         return RelocationResult(
             active=True,
             narrative=(
-                "Relocation scoring could not be completed because AQI, Teleport quality-of-life, "
-                "or World Bank relocation indicators were missing from the collected data."
+                f"Relocation scoring could not be completed. Key quality-of-life metrics, "
+                f"including {', '.join(reasons)}, were missing."
             ),
         )
 
@@ -47,7 +61,7 @@ def run_relocation_scorer(
     w_cost = float(weights.get("cost_of_living", 0.15))
 
     pm_by_country: dict[str, float] = {}
-    if {"country", "pm25"}.issubset(aqi.columns):
+    if has_aqi:
         valid = aqi.dropna(subset=["country", "pm25"]).copy()
         if not valid.empty:
             pm_by_country = (
@@ -55,7 +69,7 @@ def run_relocation_scorer(
             )
 
     city_metrics: dict[str, dict[str, float]] = defaultdict(dict)
-    if {"country", "category", "score_out_of_10"}.issubset(city.columns):
+    if has_city:
         for _, row in city.dropna(subset=["country"]).iterrows():
             country = str(row["country"]).upper()[:3]
             category = str(row.get("category", "")).lower()
@@ -72,7 +86,7 @@ def run_relocation_scorer(
                 city_metrics[country]["salary"] = score
 
     wb_metrics: dict[str, dict[str, float]] = defaultdict(dict)
-    if {"country", "label", "value", "year"}.issubset(wb.columns):
+    if has_wb:
         wb2 = wb.sort_values("year")
         latest = wb2.groupby(["country", "label"], as_index=False).tail(1)
         for _, row in latest.iterrows():

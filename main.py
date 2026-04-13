@@ -16,35 +16,73 @@ load_dotenv(ROOT / ".env")
 
 def _check_env() -> int:
     keys = [
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "ACLED_API_KEY",
-        "ACLED_EMAIL",
+        "ACLED_USERNAME",
+        "ACLED_PASSWORD",
         "NEWS_API_KEY",
     ]
     print(f"Project root: {ROOT}")
     print(f".env file: {'FOUND' if (ROOT / '.env').exists() else 'MISSING'}")
+    
+    # Check Vertex AI status
+    has_vertex_ai = (
+        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE"
+        and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    print(f"Vertex AI configured: {'✓ YES' if has_vertex_ai else '✗ NO'}")
+    
     for key in keys:
-        print(f"{key}: {'SET' if os.environ.get(key) else 'MISSING'}")
+        status = "SET" if os.environ.get(key) else "MISSING"
+        print(f"  {key}: {status}")
     return 0
 
 
 async def _run_query(query: str) -> int:
     from agents.orchestrator import run_migration_pipeline
+    from agents.debug_inspector import print_pipeline_status
+    from agents.progress_tracker import reset_tracker
 
-    if not (
-        os.environ.get("GOOGLE_API_KEY")
-        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    ):
+    # Check for either Vertex AI or direct API key authentication
+    has_vertex_ai = (
+        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE"
+        and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    has_api_key = bool(os.environ.get("GOOGLE_API_KEY"))
+    has_app_creds = bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+    
+    if not (has_vertex_ai or has_api_key or has_app_creds):
         print(
-            "Missing Google credentials. Set GOOGLE_API_KEY or "
-            "GOOGLE_APPLICATION_CREDENTIALS in .env.",
+            "Missing Google authentication. Configure one of:",
+            file=sys.stderr,
+        )
+        print(
+            "  1. Vertex AI: GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI=TRUE",
+            file=sys.stderr,
+        )
+        print(
+            "  2. API Key: GOOGLE_API_KEY",
+            file=sys.stderr,
+        )
+        print(
+            "  3. Service Account: GOOGLE_APPLICATION_CREDENTIALS",
             file=sys.stderr,
         )
         return 2
 
+    # Reset tracker for fresh run
+    reset_tracker()
+    
+    print(f"\n🚀 Starting pipeline for query: '{query}'\n")
+    
     state = await run_migration_pipeline(query)
     print("Pipeline completed.")
+    
+    # Print execution status
+    print_pipeline_status()
+    
     print("State keys:", ", ".join(sorted(state.keys())))
     hypothesis = state.get("hypothesis_report")
     if hypothesis and isinstance(hypothesis, dict):
