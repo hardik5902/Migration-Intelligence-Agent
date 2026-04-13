@@ -12,7 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 from flask import Flask, Response, render_template, request, stream_with_context
 
-from agents.country_pipeline import AVAILABLE_TOOLS, run_country_pipeline_streaming
+from agents.country_pipeline import run_country_pipeline_streaming
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
