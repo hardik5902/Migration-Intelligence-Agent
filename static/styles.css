@@ -344,6 +344,56 @@ body {
   line-height: 1.6;
 }
 
+/* ── Tool status card ────────────────────────────────────────────────────────*/
+.tool-status-card {
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 20px 28px;
+}
+
+.tool-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.tool-status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.ts-ok {
+  background: rgba(45, 106, 79, 0.1);
+  border-color: rgba(45, 106, 79, 0.22);
+  color: #1d5c3a;
+}
+
+.ts-empty {
+  background: rgba(175, 63, 47, 0.08);
+  border-color: rgba(175, 63, 47, 0.18);
+  color: var(--brand-deep);
+}
+
+.ts-name {
+  font-family: "Space Grotesk", monospace;
+  font-size: 0.8rem;
+}
+
+.ts-badge {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
 /* ── Charts section ───────────────────────────────────────────────────────── */
 .charts-section {
   padding: 28px 32px;

@@ -246,6 +246,8 @@ class CountryComparisonResult(BaseModel):
     query_focus: str = ""
     year_from: int = 2015
     year_to: int = 2023
+    # Total data rows returned per tool across all countries (0 = tool returned nothing)
+    tool_stats: dict[str, int] = Field(default_factory=dict)
 
 
 class HypothesisReport(BaseModel):

@@ -98,7 +98,7 @@ async def get_employment_data(
 ) -> tuple[list[dict[str, Any]], str]:
     """Labor-market series: ILOSTAT first, then 3 World Bank indicators in parallel."""
     own = client is None
-    c = client or httpx.AsyncClient(timeout=12.0)
+    c = client or httpx.AsyncClient(timeout=20.0)
     try:
         rows, url = await _try_ilostat(country_code, year_from, year_to, c)
         if rows:

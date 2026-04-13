@@ -407,6 +407,26 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
         generate_evidences(query, countries_data, selector.selected_tools),
     )
 
+    # Compute how many rows each tool returned across all countries
+    _tool_data_keys = {
+        "worldbank": "worldbank",
+        "unhcr": "displacement",
+        "acled": "conflict_events",
+        "teleport": "city_scores",
+        "news": "news",
+        "climate": "climate",
+        "employment": "employment",
+        "aqi": "aqi",
+    }
+    tool_stats: dict[str, int] = {}
+    for tool in selector.selected_tools:
+        data_key = _tool_data_keys.get(tool, tool)
+        total = sum(
+            len(dataset.get(data_key) or [])
+            for dataset in countries_data.values()
+        )
+        tool_stats[tool] = total
+
     return CountryComparisonResult(
         query=query,
         countries=selector.countries,
@@ -418,4 +438,5 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
         query_focus=selector.query_focus,
         year_from=selector.year_from,
         year_to=selector.year_to,
+        tool_stats=tool_stats,
     )

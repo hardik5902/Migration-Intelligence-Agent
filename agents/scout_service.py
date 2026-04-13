@@ -55,7 +55,7 @@ async def collect_migration_dataset(
     fresh: dict[str, str] = {}
     tool_calls: list[ToolCall] = []
 
-    async with httpx.AsyncClient(timeout=12.0) as client:
+    async with httpx.AsyncClient(timeout=20.0) as client:
 
         async def eco():
             started = datetime.now(timezone.utc).isoformat()

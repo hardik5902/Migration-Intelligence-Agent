@@ -138,7 +138,7 @@ async def fetch_macro_bundle(
         "SI.POV.GINI": "gini",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=12.0)
+    c = client or httpx.AsyncClient(timeout=20.0)
     try:
         tasks = [
             get_indicator(country_code, ind, year_from, year_to, c)
@@ -179,7 +179,7 @@ async def fetch_relocation_bundle(
         "SI.POV.NAHC": "poverty_headcount",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=12.0)
+    c = client or httpx.AsyncClient(timeout=20.0)
     try:
         tasks = [
             get_indicator(country_code, ind, year_from, year_to, c)

@@ -107,14 +107,6 @@
                 {% endfor %}
               </div>
             </div>
-            <div class="meta-block">
-              <p class="eyebrow">Tools Used</p>
-              <div class="chip-row">
-                {% for tool in result.tools_used %}
-                <span class="chip chip-tool">{{ tool }}</span>
-                {% endfor %}
-              </div>
-            </div>
             <div class="meta-block meta-block-narrow">
               <p class="eyebrow">Period</p>
               <strong class="period-label">{{ result.year_from }} – {{ result.year_to }}</strong>
@@ -124,6 +116,28 @@
           <p class="query-focus-text">{{ result.query_focus }}</p>
           {% endif %}
         </section>
+
+        <!-- Tool status: which tools ran and how much data they returned -->
+        {% if result.tool_stats %}
+        <section class="tool-status-card">
+          <p class="eyebrow">Data Collection Status</p>
+          <div class="tool-status-grid">
+            {% for tool in result.tools_used %}
+            {% set rows = result.tool_stats.get(tool, 0) %}
+            <div class="tool-status-item {% if rows > 0 %}ts-ok{% else %}ts-empty{% endif %}">
+              <span class="ts-name">{{ tool }}</span>
+              <span class="ts-badge">
+                {% if rows > 0 %}
+                  ✓ {{ rows }} rows
+                {% else %}
+                  ⚠ no data
+                {% endif %}
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+        </section>
+        {% endif %}
 
         <!-- 4 Charts in 2 × 2 grid -->
         {% if charts %}
