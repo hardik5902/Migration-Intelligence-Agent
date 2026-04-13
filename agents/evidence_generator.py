@@ -166,24 +166,49 @@ def _build_data_summary(
 # Public function
 # ---------------------------------------------------------------------------
 
+def _build_eda_summary(eda_findings: dict[str, Any]) -> str:
+    """Convert EDA findings into a compact text block for the LLM prompt."""
+    if not eda_findings:
+        return ""
+    lines = ["=== EDA Findings (statistical pre-analysis) ==="]
+    for f in eda_findings.get("findings", []):
+        lines.append(f"  [{f.get('type','').upper()}] {f.get('title','')} → {f.get('value','')}")
+        if f.get("detail"):
+            lines.append(f"    {f['detail']}")
+    top_corrs = eda_findings.get("correlations", [])[:3]
+    if top_corrs:
+        lines.append("  Top correlations (Pearson r):")
+        for c in top_corrs:
+            lines.append(
+                f"    {c.get('indicator','')} ↔ target: r={c.get('pearson_r',0):.2f}"
+                f"  p={c.get('pearson_p',1):.3f}"
+            )
+    return "\n".join(lines)
+
+
 async def generate_evidences(
     query: str,
     countries_data: dict[str, Any],
     selected_tools: list[str],
+    eda_findings: dict[str, Any] | None = None,
 ) -> list[Evidence]:
     """Ask the LLM to produce exactly 3 evidence insights from collected data."""
     client = get_genai_client()
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
     data_summary = _build_data_summary(countries_data, selected_tools)
+    eda_summary  = _build_eda_summary(eda_findings or {})
     countries = list(countries_data.keys())
 
     prompt = (
         f"Query: {query}\n\n"
         f"Countries analysed: {', '.join(countries)}\n"
         f"Tools used: {', '.join(selected_tools)}\n\n"
-        f"Data summary:\n{data_summary}\n\n"
-        "Generate exactly 3 key evidence-backed insights from this data."
+        + (f"{eda_summary}\n\n" if eda_summary else "")
+        + f"Raw data summary:\n{data_summary}\n\n"
+        "Generate exactly 3 key evidence-backed insights from this data. "
+        "Where the EDA findings above surface a specific pattern or anomaly, "
+        "reference it directly in one of the insights."
     )
 
     evidences: list[Evidence] = []

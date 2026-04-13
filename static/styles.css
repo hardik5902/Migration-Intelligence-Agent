@@ -45,7 +45,8 @@ body {
 .chart-card,
 .evidence-card,
 .charts-section,
-.evidence-section {
+.evidence-section,
+.eda-finding-card {
   background: var(--panel);
   backdrop-filter: blur(18px);
   border: 1px solid var(--line);
@@ -402,19 +403,49 @@ body {
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 18px;
   margin-top: 4px;
 }
 
 .chart-card {
-  padding: 16px 18px 8px;
-  height: 460px;
+  padding: 18px 20px 22px;
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
 .plot-surface {
+  flex: 1 1 auto;
   width: 100%;
-  height: 428px;
+  min-height: 480px;
+  max-width: 100%;
+}
+
+.plot-surface .js-plotly-plot,
+.plot-surface .plot-container,
+.plot-surface .svg-container {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* EDA charts grid: same layout as comparison charts */
+#eda-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px;
+  margin-top: 12px;
+}
+
+@media (max-width: 960px) {
+  .chart-card { min-height: 480px; }
+  .plot-surface { min-height: 440px; }
+  #eda-charts-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .chart-card { padding: 14px 14px 18px; min-height: 440px; }
+  .plot-surface { min-height: 400px; }
 }
 
 /* ── Evidence section ─────────────────────────────────────────────────────── */
@@ -682,4 +713,86 @@ body {
   .tools-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── EDA Section ─────────────────────────────────────────────────────────── */
+.eda-section {
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 36px 40px 40px;
+}
+
+.eda-findings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.eda-finding-card {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 20px 22px;
+  border-radius: var(--radius-md);
+  transition: box-shadow 0.2s ease;
+}
+
+.eda-finding-card:hover {
+  box-shadow: 0 8px 28px rgba(84, 45, 28, 0.14);
+}
+
+/* Left-border accent per finding type */
+.eda-growth      { border-left: 4px solid #2d6a4f; }
+.eda-anomaly     { border-left: 4px solid #af3f2f; }
+.eda-correlation { border-left: 4px solid #6a78f0; }
+.eda-volatility  { border-left: 4px solid #c45c26; }
+.eda-default     { border-left: 4px solid var(--teal); }
+
+.eda-card-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.eda-card-body h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.eda-card-value {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-family: "Source Serif 4", serif;
+  color: var(--brand);
+}
+
+.eda-card-detail {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.eda-charts-wrap {
+  margin-top: 24px;
+}
+
+/* ── Hero steps: support 4-step layout ──────────────────────────────────── */
+.hero-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+@media (max-width: 640px) {
+  .eda-section { padding: 24px 20px 28px; }
+  .eda-findings-grid { grid-template-columns: 1fr; }
 }

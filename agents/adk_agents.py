@@ -31,10 +31,12 @@ from google.adk.events.event_actions import EventActions
 from typing_extensions import override
 
 from agents.data_collector import collect_data_for_countries
+from agents.eda_analyst import run_eda
 from agents.evidence_generator import generate_evidences
 from agents.pipeline_config import TOOL_DATA_KEYS
 from agents.tool_selector import analyze_query_with_llm
 from analysis.country_charts import build_country_comparison_charts
+from analysis.eda_charts import build_eda_charts
 from models.schemas import ToolSelectorOutput
 
 # ---------------------------------------------------------------------------
@@ -138,7 +140,71 @@ class DataCollectorADKAgent(BaseAgent):
 
 
 # ---------------------------------------------------------------------------
-# Agent 3 — Chart building + evidence generation (runs both concurrently)
+# Agent 3 — Exploratory Data Analysis
+# ---------------------------------------------------------------------------
+
+class EDAAnalystADKAgent(BaseAgent):
+    """Runs statistical EDA (growth rates, anomalies, correlations) on collected data."""
+
+    @override
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        selector = ToolSelectorOutput.model_validate(
+            ctx.session.state.get("selector_output", {})
+        )
+        countries_data: dict[str, Any] = ctx.session.state.get("countries_data", {})
+
+        _emit("stage", {
+            "step": 3, "total": 5,
+            "label": "Exploratory data analysis",
+            "message": "Running growth-rate, anomaly, and correlation analysis…",
+        })
+
+        # run_eda calls run_growth_rate, run_anomaly_detect, run_correlation_analysis
+        eda_findings = await asyncio.to_thread(
+            run_eda,
+            countries_data,
+            selector.selected_tools,
+            selector.query_focus,
+        )
+
+        # Build up to 2 EDA-specific charts (heatmap / CAGR bar / anomaly / spread)
+        eda_chart_jsons: list[str] = await asyncio.to_thread(
+            build_eda_charts,
+            eda_findings,
+            countries_data,
+        )
+
+        from plotly.io import from_json as _plotly_from_json
+        eda_charts_normalized: list[Any] = []
+        for j in eda_chart_jsons:
+            try:
+                eda_charts_normalized.append(_plotly_from_json(j).to_plotly_json())
+            except Exception:
+                pass
+
+        _emit("eda", {
+            "findings":   eda_findings.get("findings", []),
+            "eda_charts": eda_charts_normalized,
+            "correlations": eda_findings.get("correlations", []),
+        })
+
+        yield Event(
+            invocation_id=ctx.invocation_id,
+            author=self.name,
+            branch=ctx.branch,
+            actions=EventActions(
+                state_delta={
+                    "eda_findings":   eda_findings,
+                    "eda_charts":     eda_charts_normalized,
+                }
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Agent 4 — Chart building + evidence generation (runs both concurrently)
 # ---------------------------------------------------------------------------
 
 class ChartEvidenceADKAgent(BaseAgent):
@@ -154,10 +220,11 @@ class ChartEvidenceADKAgent(BaseAgent):
             ctx.session.state.get("selector_output", {})
         )
         countries_data: dict[str, Any] = ctx.session.state.get("countries_data", {})
+        eda_findings: dict[str, Any] = ctx.session.state.get("eda_findings", {})
         query = pipeline_query.get() or ctx.session.state.get("user_query", "")
 
         _emit("stage", {
-            "step": 3, "total": 4,
+            "step": 4, "total": 5,
             "label": "Building charts & insights",
             "message": (
                 "Generating 4 comparison charts and "
@@ -173,7 +240,7 @@ class ChartEvidenceADKAgent(BaseAgent):
                 selector.selected_tools,
                 selector.query_focus,
             ),
-            generate_evidences(query, countries_data, selector.selected_tools),
+            generate_evidences(query, countries_data, selector.selected_tools, eda_findings),
         )
 
         # Normalise Plotly JSON strings → dicts for the browser JS client
@@ -197,7 +264,7 @@ class ChartEvidenceADKAgent(BaseAgent):
         }
 
         _emit("stage", {
-            "step": 4, "total": 4,
+            "step": 5, "total": 5,
             "label": "Finalising results",
             "message": "Wrapping up…",
         })
@@ -236,7 +303,7 @@ def build_country_comparison_pipeline() -> SequentialAgent:
         name="country_comparison_pipeline",
         description=(
             "Country comparison pipeline: "
-            "select tools → collect data → build charts + insights"
+            "select tools → collect data → EDA → build charts + insights"
         ),
         sub_agents=[
             ToolSelectorADKAgent(
@@ -247,10 +314,18 @@ def build_country_comparison_pipeline() -> SequentialAgent:
                 name="data_collector",
                 description="Fetches live data for all selected countries in parallel.",
             ),
+            EDAAnalystADKAgent(
+                name="eda_analyst",
+                description=(
+                    "Runs statistical EDA: growth rates (CAGR), anomaly detection, "
+                    "and cross-country correlations. Stores eda_findings + eda_charts."
+                ),
+            ),
             ChartEvidenceADKAgent(
                 name="chart_evidence",
                 description=(
-                    "Builds 4 comparison charts and 3 evidence insights concurrently."
+                    "Builds 4 comparison charts and 3 evidence insights "
+                    "informed by EDA findings."
                 ),
             ),
         ],

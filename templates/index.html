@@ -43,8 +43,15 @@
           <div class="hero-step">
             <span class="step-num">3</span>
             <div>
+              <strong>Exploratory data analysis</strong>
+              <p>Growth rates (CAGR), anomaly detection, and cross-country correlations surface hidden patterns before any chart is built.</p>
+            </div>
+          </div>
+          <div class="hero-step">
+            <span class="step-num">4</span>
+            <div>
               <strong>4 charts · 3 insights</strong>
-              <p>Visual comparisons + 3 LLM-generated evidence points from the collected data.</p>
+              <p>Visual comparisons (varied chart types) + 3 LLM-generated evidence points grounded in EDA findings.</p>
             </div>
           </div>
         </div>
@@ -111,11 +118,18 @@
           <div class="ps-item ps-pending" id="ps-3">
             <div class="ps-dot"></div>
             <div class="ps-text">
-              <strong>Building charts &amp; insights</strong>
+              <strong>Exploratory data analysis</strong>
               <span class="ps-msg">Waiting…</span>
             </div>
           </div>
           <div class="ps-item ps-pending" id="ps-4">
+            <div class="ps-dot"></div>
+            <div class="ps-text">
+              <strong>Building charts &amp; insights</strong>
+              <span class="ps-msg">Waiting…</span>
+            </div>
+          </div>
+          <div class="ps-item ps-pending" id="ps-5">
             <div class="ps-dot"></div>
             <div class="ps-text">
               <strong>Finalising results</strong>
@@ -153,6 +167,21 @@
           <div class="tool-status-grid" id="tool-status-grid"></div>
         </section>
 
+        <!-- EDA findings + EDA charts (populated on "eda" SSE event) -->
+        <section id="eda-panel" class="eda-section hidden">
+          <div class="section-heading">
+            <p class="eyebrow">Exploratory Data Analysis</p>
+            <h2>Statistical patterns surfaced before charting</h2>
+          </div>
+          <!-- EDA finding cards (growth / anomaly / correlation / volatility) -->
+          <div class="eda-findings-grid" id="eda-findings-grid"></div>
+          <!-- EDA-specific charts: heatmap / CAGR bar / anomaly timeline / stats spread -->
+          <div id="eda-charts-wrap" class="eda-charts-wrap hidden">
+            <p class="eyebrow" style="margin-top:1.5rem">EDA Visualisations</p>
+            <div class="charts-grid" id="eda-charts-grid"></div>
+          </div>
+        </section>
+
         <!-- 4 Charts in 2 × 2 grid -->
         <section id="charts-panel" class="charts-section hidden">
           <div class="section-heading">
@@ -188,11 +217,14 @@
       const hide = el => el.classList.add('hidden');
       const $    = id => document.getElementById(id);
 
+      const TOTAL_STEPS = 5;
+
       function setStep(step, msg) {
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= TOTAL_STEPS; i++) {
           const el = $(`ps-${i}`);
+          if (!el) continue;
           el.classList.remove('ps-pending', 'ps-active', 'ps-done');
-          if (i < step)       el.classList.add('ps-done');
+          if (i < step)        el.classList.add('ps-done');
           else if (i === step) el.classList.add('ps-active');
           else                 el.classList.add('ps-pending');
         }
@@ -214,8 +246,9 @@
         hide(errorBox);
         hide(resShell);
         // Reset all panels inside results-shell
-        ['result-header-panel','tool-status-panel','charts-panel','evidence-panel']
-          .forEach(id => hide($(id)));
+        ['result-header-panel','tool-status-panel','eda-panel',
+         'eda-charts-wrap','charts-panel','evidence-panel']
+          .forEach(id => { const el = $(id); if (el) hide(el); });
         // Clear dynamic content
         $('countries-chips').innerHTML = '';
         $('tools-chips').innerHTML = '';
@@ -223,11 +256,14 @@
         $('query-focus-text').textContent = '';
         hide($('query-focus-text'));
         $('tool-status-grid').innerHTML = '';
+        $('eda-findings-grid').innerHTML = '';
+        $('eda-charts-grid').innerHTML = '';
         $('charts-grid').innerHTML = '';
         $('evidence-grid').innerHTML = '';
         // Reset step indicators
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= TOTAL_STEPS; i++) {
           const el = $(`ps-${i}`);
+          if (!el) continue;
           el.classList.remove('ps-active','ps-done');
           el.classList.add('ps-pending');
           el.querySelector('.ps-msg').textContent = 'Waiting…';
@@ -267,6 +303,58 @@
 
         show($('result-header-panel'));
         show(resShell);
+      }
+
+      // ── EDA type → icon + colour class ────────────────────────────────────────
+      const EDA_META = {
+        growth:      { icon: '📈', cls: 'eda-growth'      },
+        anomaly:     { icon: '⚠️',  cls: 'eda-anomaly'     },
+        correlation: { icon: '🔗', cls: 'eda-correlation'  },
+        volatility:  { icon: '📊', cls: 'eda-volatility'   },
+      };
+
+      function onEda(d) {
+        const findings   = d.findings   || [];
+        const edaCharts  = d.eda_charts || [];
+
+        // ── Finding cards ──────────────────────────────────────────────────────
+        const grid = $('eda-findings-grid');
+        grid.innerHTML = '';
+        if (findings.length) {
+          findings.forEach(f => {
+            const meta = EDA_META[f.type] || { icon: '🔎', cls: 'eda-default' };
+            const card = document.createElement('article');
+            card.className = `eda-finding-card ${meta.cls}`;
+            card.innerHTML = `
+              <div class="eda-card-icon">${meta.icon}</div>
+              <div class="eda-card-body">
+                <h3>${f.title || ''}</h3>
+                <p class="eda-card-value">${f.value || ''}</p>
+                <p class="eda-card-detail">${f.detail || ''}</p>
+              </div>`;
+            grid.appendChild(card);
+          });
+          show($('eda-panel'));
+          show(resShell);
+        }
+
+        // ── EDA charts ─────────────────────────────────────────────────────────
+        if (edaCharts.length) {
+          const cGrid = $('eda-charts-grid');
+          cGrid.innerHTML = '';
+          edaCharts.forEach((chart, i) => {
+            const article = document.createElement('article');
+            article.className = 'chart-card';
+            const div = document.createElement('div');
+            div.id = `eda-chart-${i}`;
+            div.className = 'plot-surface';
+            article.appendChild(div);
+            cGrid.appendChild(article);
+            Plotly.newPlot(`eda-chart-${i}`, chart.data, chart.layout,
+              { responsive: true, displayModeBar: false, displaylogo: false });
+          });
+          show($('eda-charts-wrap'));
+        }
       }
 
       function onCharts(d) {
@@ -336,13 +424,14 @@
       }
 
       function onDone() {
-        // Mark all steps done
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= TOTAL_STEPS; i++) {
           const el = $(`ps-${i}`);
+          if (!el) continue;
           el.classList.remove('ps-pending','ps-active');
           el.classList.add('ps-done');
         }
-        $(`ps-4`).querySelector('.ps-msg').textContent = 'Complete!';
+        const lastStep = $(`ps-${TOTAL_STEPS}`);
+        if (lastStep) lastStep.querySelector('.ps-msg').textContent = 'Complete!';
         setTimeout(() => hide(loadPanel), 1200);
         runBtn.disabled = false;
         runBtn.textContent = 'Run Analysis';
@@ -393,8 +482,9 @@
             try { data = JSON.parse(dataStr); } catch (_) {}
 
             switch (eventName) {
-              case 'stage':     onStage(data);    break;
+              case 'stage':     onStage(data);     break;
               case 'selection': onSelection(data); break;
+              case 'eda':       onEda(data);        break;
               case 'charts':    onCharts(data);    break;
               case 'evidence':  onEvidence(data);  break;
               case 'done':      onDone();           break;

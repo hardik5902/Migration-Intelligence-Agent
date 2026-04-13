@@ -60,8 +60,6 @@ Return valid JSON with EXACTLY these fields (no extra keys):
   "reasoning": "worldbank always included; added employment for labour data and unhcr for displacement flows"
 }"""
 
-_FALLBACK_COUNTRIES = ["Germany", "Canada", "Australia", "Netherlands", "Sweden"]
-
 # ---------------------------------------------------------------------------
 # Genai client helper (shared with evidence_generator)
 # ---------------------------------------------------------------------------
@@ -109,17 +107,8 @@ async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
         return result
 
     except Exception as exc:
-        print(f"[TOOL_SELECTOR] LLM failed: {exc}. Using fallback.")
-        return ToolSelectorOutput(
-            selected_tools=["worldbank", "employment", "unhcr"],
-            countries=_FALLBACK_COUNTRIES,
-            country_codes=[
-                country_name_to_iso3(c) or c[:3].upper()
-                for c in _FALLBACK_COUNTRIES
-            ],
-            k=5,
-            query_focus="General country comparison",
-            year_from=2015,
-            year_to=2023,
-            reasoning=f"Fallback due to error: {exc}",
-        )
+        # Re-raise so the pipeline surfaces the real error to the user
+        # rather than silently running with static countries unrelated to the query.
+        raise RuntimeError(
+            f"Tool selector LLM call failed — please retry. Original error: {exc}"
+        ) from exc

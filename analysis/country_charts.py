@@ -18,13 +18,13 @@ COUNTRY_COLORS = [
 ]
 
 # ── Base layout shared by all charts ──────────────────────────────────────────
-def _base_layout(title: str, yaxis_title: str, source: str, height: int = 420) -> dict:
+def _base_layout(title: str, yaxis_title: str, source: str, height: int = 460) -> dict:
     return dict(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,253,248,0.9)",
         height=height,
         autosize=True,
-        margin=dict(l=64, r=24, t=52, b=90),
+        margin=dict(l=72, r=32, t=58, b=130),
         font=dict(family="Space Grotesk, sans-serif", size=12, color="#1e1b18"),
         title=dict(
             text=title,
@@ -50,7 +50,7 @@ def _base_layout(title: str, yaxis_title: str, source: str, height: int = 420) -
         legend=dict(
             orientation="h",
             yanchor="top",
-            y=-0.18,
+            y=-0.22,
             xanchor="left",
             x=0,
             bgcolor="rgba(255,253,248,0.85)",
@@ -63,7 +63,7 @@ def _base_layout(title: str, yaxis_title: str, source: str, height: int = 420) -
             dict(
                 text=f"Source: {source}",
                 xref="paper", yref="paper",
-                x=1, y=-0.28,
+                x=1, y=-0.38,
                 xanchor="right", yanchor="top",
                 showarrow=False,
                 font=dict(size=9, color="#9b8f84"),
@@ -126,6 +126,38 @@ def _climate_series(dataset: dict, col: str) -> pd.DataFrame | None:
     if sub.empty:
         return None
     return sub[["year", col]].rename(columns={col: "value"}).sort_values("year")
+
+
+def _scalar_gdp_per_capita(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "gdp_per_capita_usd")
+    if series is None or series.empty:
+        return None
+    last = series.dropna(subset=["value"]).sort_values("year").iloc[-1]
+    return float(last["value"])
+
+
+def _scalar_unemployment(dataset: dict) -> float | None:
+    emp = pd.DataFrame(dataset.get("employment") or [])
+    if emp.empty or "unemployment_rate" not in emp.columns:
+        return None
+    sub = emp.dropna(subset=["unemployment_rate", "year"])
+    if sub.empty:
+        return None
+    return float(sub.sort_values("year").iloc[-1]["unemployment_rate"])
+
+
+def _scalar_gdp_growth(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "gdp_growth")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_inflation(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "inflation")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
 
 
 def _scalar_aqi(dataset: dict) -> float | None:
@@ -255,6 +287,97 @@ def _build_bar_chart(
     return fig
 
 
+# ── Scatter chart builder (country positioning: x vs y, one point per country) ─
+
+def _build_scatter_chart(
+    countries_data: dict,
+    colors: dict,
+    x_extractor,
+    y_extractor,
+    title: str,
+    xaxis_title: str,
+    yaxis_title: str,
+    source: str,
+) -> go.Figure:
+    x_vals: dict[str, float] = {}
+    y_vals: dict[str, float] = {}
+    for country, dataset in countries_data.items():
+        xv = x_extractor(dataset)
+        yv = y_extractor(dataset)
+        if xv is not None and yv is not None:
+            x_vals[country] = xv
+            y_vals[country] = yv
+
+    common = [c for c in x_vals if c in y_vals]
+    if len(common) < 2:
+        return _no_data_fig(title, f"Need ≥ 2 countries with both {xaxis_title} and {yaxis_title}.", source)
+
+    fig = go.Figure()
+    for country in common:
+        col = colors.get(country, "#af3f2f")
+        fig.add_trace(go.Scatter(
+            x=[x_vals[country]],
+            y=[y_vals[country]],
+            name=country,
+            mode="markers+text",
+            text=[country],
+            textposition="top center",
+            textfont=dict(size=10),
+            marker=dict(size=14, color=col, line=dict(color="white", width=1.5)),
+            hovertemplate=(
+                f"<b>{country}</b><br>"
+                f"{xaxis_title}: %{{x:,.1f}}<br>"
+                f"{yaxis_title}: %{{y:.2f}}<extra></extra>"
+            ),
+        ))
+
+    layout = _base_layout(title, xaxis_title, source)
+    layout["xaxis"]["title"] = xaxis_title
+    layout["yaxis"]["title"] = yaxis_title
+    layout["showlegend"] = False
+    fig.update_layout(**layout)
+    return fig
+
+
+# ── Area chart builder (filled line per country over time) ─────────────────────
+
+def _build_area_chart(
+    countries_data: dict,
+    colors: dict,
+    extractor,
+    title: str,
+    yaxis_title: str,
+    source: str,
+) -> go.Figure:
+    fig = go.Figure()
+    has_data = False
+
+    for country, dataset in countries_data.items():
+        series = extractor(dataset)
+        if series is None or series.empty:
+            continue
+        col = colors.get(country, "#af3f2f")
+        # Convert hex to rgba for fill
+        r, g, b = int(col[1:3], 16), int(col[3:5], 16), int(col[5:7], 16)
+        fig.add_trace(go.Scatter(
+            x=series["year"],
+            y=series["value"],
+            name=country,
+            mode="lines",
+            line=dict(color=col, width=2.5),
+            fill="tozeroy",
+            fillcolor=f"rgba({r},{g},{b},0.12)",
+            hovertemplate=f"<b>{country}</b><br>Year: %{{x}}<br>{yaxis_title}: %{{y:.2f}}<extra></extra>",
+        ))
+        has_data = True
+
+    if not has_data:
+        return _no_data_fig(title, f"No {source} data for the selected countries.", source)
+
+    fig.update_layout(**_base_layout(title, yaxis_title, source))
+    return fig
+
+
 # ── Metric registry: ordered by desirability ──────────────────────────────────
 #
 # Each entry defines:
@@ -273,6 +396,17 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Annual %",
             "source": "World Bank",
         },
+        # ── Scatter: country positioning (worldbank + employment) ─────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_gdp_per_capita,
+            "y_extractor": _scalar_unemployment,
+            "title": "Country Positioning: GDP per Capita vs Unemployment Rate",
+            "xaxis_title": "GDP per Capita (USD)",
+            "yaxis_title": "Unemployment Rate (%)",
+            "source": "World Bank / ILO",
+        },
+        # ── Economic (line) ────────────────────────────────────────────────────
         {
             "type": "line",
             "extractor": lambda d: _wb_series(d, "inflation"),
@@ -288,6 +422,33 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "% of labour force",
             "source": "ILO / World Bank",
         },
+        # ── Area: GDP per capita trajectory (worldbank only) ─────────────────
+        {
+            "type": "area",
+            "extractor": lambda d: _wb_series(d, "gdp_per_capita_usd"),
+            "title": "GDP per Capita Trajectory — Filled Area (USD)",
+            "yaxis_title": "GDP per Capita (USD)",
+            "source": "World Bank",
+        },
+        # ── Scatter: inflation vs unemployment (worldbank + employment) ───────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_inflation,
+            "y_extractor": _scalar_unemployment,
+            "title": "Macroeconomic Mix: Inflation vs Unemployment (latest)",
+            "xaxis_title": "Inflation (%)",
+            "yaxis_title": "Unemployment Rate (%)",
+            "source": "World Bank / ILO",
+        },
+        # ── Bar: snapshot GDP per capita (worldbank only) ─────────────────────
+        {
+            "type": "bar",
+            "extractor": _scalar_gdp_per_capita,
+            "title": "GDP per Capita — Latest Snapshot (USD)",
+            "yaxis_title": "USD per capita",
+            "source": "World Bank",
+            "ascending": False,
+        },
         {
             "type": "line",
             "extractor": lambda d: _wb_series(d, "unemployment"),
@@ -301,6 +462,14 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "title": "Youth Unemployment Rate (%)",
             "yaxis_title": "% youth labour",
             "source": "ILO / World Bank",
+        },
+        # ── Area: inflation trend (worldbank only) ────────────────────────────
+        {
+            "type": "area",
+            "extractor": lambda d: _wb_series(d, "inflation"),
+            "title": "Inflation Trend — Filled Area (%)",
+            "yaxis_title": "CPI Annual %",
+            "source": "World Bank",
         },
         # ── Inequality / governance ────────────────────────────────────────────
         {
@@ -316,6 +485,24 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "title": "Political Stability Index",
             "yaxis_title": "Score",
             "source": "World Bank WGI",
+        },
+        # ── Scatter: GDP per capita vs GDP growth (worldbank only) ────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_gdp_per_capita,
+            "y_extractor": _scalar_gdp_growth,
+            "title": "Wealth vs Momentum: GDP per Capita vs GDP Growth",
+            "xaxis_title": "GDP per Capita (USD)",
+            "yaxis_title": "GDP Growth (%)",
+            "source": "World Bank",
+        },
+        # ── Area: unemployment trend (employment only) ────────────────────────
+        {
+            "type": "area",
+            "extractor": lambda d: _emp_series(d, "unemployment_rate"),
+            "title": "Unemployment Trend — Filled Area (%)",
+            "yaxis_title": "% of labour force",
+            "source": "ILO / World Bank",
         },
         # ── Climate ────────────────────────────────────────────────────────────
         {
@@ -366,14 +553,56 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "title": "Quality-of-Life Score (Teleport, 0–10)",
             "yaxis_title": "Score /10",
             "source": "Teleport",
-            "ascending": True,  # higher = better, show ascending (highest first)
+            "ascending": True,
+        },
+        # ── Area: displacement outflow ──────────────────────────────────────────
+        {
+            "type": "area",
+            "extractor": lambda d: (
+                (lambda disp:
+                    disp.groupby("year", as_index=False)["value"]
+                    .sum().sort_values("year")
+                    if not disp.empty and {"year", "value"}.issubset(disp.columns)
+                    else None
+                )(pd.DataFrame(d.get("displacement") or []))
+            ),
+            "title": "Refugee Displacement Outflow over Time (filled area)",
+            "yaxis_title": "Persons displaced",
+            "source": "UNHCR",
+        },
+        # ── Area: temperature anomaly ───────────────────────────────────────────
+        {
+            "type": "area",
+            "extractor": lambda d: _climate_series(d, "avg_temp_anomaly_c"),
+            "title": "Temperature Anomaly Trend — Filled Area (°C)",
+            "yaxis_title": "°C vs baseline",
+            "source": "Open-Meteo",
         },
     ]
 
 
 def _count_countries_with_data(metric: dict, countries_data: dict) -> int:
     """How many countries have non-None data for this metric."""
-    extractor = metric["extractor"]
+    mtype = metric.get("type", "line")
+
+    if mtype == "scatter":
+        # Both x and y must be present
+        x_ext = metric.get("x_extractor")
+        y_ext = metric.get("y_extractor")
+        if not x_ext or not y_ext:
+            return 0
+        count = 0
+        for dataset in countries_data.values():
+            try:
+                if x_ext(dataset) is not None and y_ext(dataset) is not None:
+                    count += 1
+            except Exception:
+                pass
+        return count
+
+    extractor = metric.get("extractor")
+    if not extractor:
+        return 0
     count = 0
     for dataset in countries_data.values():
         try:
@@ -405,59 +634,104 @@ def build_country_comparison_charts(
     countries = list(countries_data.keys())
     colors = _color_map(countries)
 
-    # Score each metric by how many countries have data
+    # Score each metric by how many countries have data and keep only
+    # candidates that actually have data — avoids padding with blanks.
     registry = _metric_registry(countries_data)
-    scored = [(m, _count_countries_with_data(m, countries_data)) for m in registry]
+    candidates = [
+        (m, _count_countries_with_data(m, countries_data))
+        for m in registry
+    ]
+    candidates = [(m, n) for m, n in candidates if n >= 2]
 
-    # Deduplicate: keep first occurrence of each (title, source) pair
+    # Two-pass selection:
+    #   Pass 1 (variety): at most 1 of each visual type — max 4 distinct types.
+    #   Pass 2 (relaxed): cap each type at 2 to fill remaining slots.
+    #   Pass 3 (final fill): any leftover candidates, no type cap.
     seen_titles: set[str] = set()
     chosen: list[dict] = []
-    for metric, n_countries in scored:
-        key = metric["title"]
-        if key in seen_titles:
-            continue
-        if n_countries > 0:
-            seen_titles.add(key)
-            chosen.append(metric)
-        if len(chosen) == 4:
-            break
 
-    # Pad to 4 with empty-state placeholders if necessary
-    placeholders = [
-        ("No Additional Data", "No further data was returned by the selected tools.", ""),
-    ]
+    def _pick(max_per_type: int | None) -> None:
+        type_counts: dict[str, int] = {}
+        for metric in chosen:
+            t = metric.get("type", "line")
+            type_counts[t] = type_counts.get(t, 0) + 1
+        for metric, _n in candidates:
+            if len(chosen) >= 4:
+                return
+            key = metric["title"]
+            if key in seen_titles:
+                continue
+            mtype = metric.get("type", "line")
+            if max_per_type is not None and type_counts.get(mtype, 0) >= max_per_type:
+                continue
+            seen_titles.add(key)
+            type_counts[mtype] = type_counts.get(mtype, 0) + 1
+            chosen.append(metric)
+
+    _pick(max_per_type=1)   # variety first
+    _pick(max_per_type=2)   # allow pairs
+    _pick(max_per_type=None)  # fill rest
+
+    # If we still couldn't fill 4, fall back to empty-state placeholders
     while len(chosen) < 4:
-        ph = placeholders[0]
         chosen.append({
             "type": "empty",
-            "title": ph[0],
-            "message": ph[1],
-            "source": ph[2],
+            "title": "No Additional Data",
+            "message": "No further data was returned by the selected tools.",
+            "source": "",
         })
 
     # Build figures
     charts: list[str] = []
     for metric in chosen[:4]:
-        if metric["type"] == "empty":
-            fig = _no_data_fig(metric["title"], metric.get("message", ""), metric["source"])
-        elif metric["type"] == "line":
-            fig = _build_line_chart(
-                countries_data, colors,
-                metric["extractor"],
-                metric["title"],
-                metric["yaxis_title"],
-                metric["source"],
-            )
-        else:  # bar
-            fig = _build_bar_chart(
-                countries_data, colors,
-                metric["extractor"],
-                metric["title"],
-                metric["yaxis_title"],
-                metric["source"],
-                reference_y=metric.get("reference_y"),
-                reference_label=metric.get("reference_label", ""),
-                ascending=metric.get("ascending", False),
+        mtype = metric.get("type", "line")
+        try:
+            if mtype == "empty":
+                fig = _no_data_fig(metric["title"], metric.get("message", ""), metric["source"])
+            elif mtype == "line":
+                fig = _build_line_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"],
+                    metric["yaxis_title"],
+                    metric["source"],
+                )
+            elif mtype == "bar":
+                fig = _build_bar_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"],
+                    metric["yaxis_title"],
+                    metric["source"],
+                    reference_y=metric.get("reference_y"),
+                    reference_label=metric.get("reference_label", ""),
+                    ascending=metric.get("ascending", False),
+                )
+            elif mtype == "scatter":
+                fig = _build_scatter_chart(
+                    countries_data, colors,
+                    metric["x_extractor"],
+                    metric["y_extractor"],
+                    metric["title"],
+                    metric["xaxis_title"],
+                    metric["yaxis_title"],
+                    metric["source"],
+                )
+            elif mtype == "area":
+                fig = _build_area_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"],
+                    metric["yaxis_title"],
+                    metric["source"],
+                )
+            else:
+                fig = _no_data_fig(metric["title"], "Unknown chart type.", metric.get("source", ""))
+        except Exception:
+            fig = _no_data_fig(
+                metric.get("title", "Chart"),
+                "An error occurred while building this chart.",
+                metric.get("source", ""),
             )
         charts.append(fig.to_json())
 
