@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, Callable
 
 from google import genai
 from google.genai import types
@@ -33,14 +33,12 @@ from tools.country_codes import country_name_to_iso3
 # ---------------------------------------------------------------------------
 
 AVAILABLE_TOOLS: dict[str, str] = {
-    "worldbank": "GDP per capita, inflation, health & education spending, poverty",
+    "worldbank": "GDP growth, inflation, health & education spending, poverty, political stability",
+    "employment": "Unemployment rates, youth unemployment, labour force participation (ILO + World Bank)",
     "unhcr": "Refugee displacement outflows and destination countries",
+    "environment": "Climate trends (temperature, precipitation) + air quality PM2.5 — combined",
     "acled": "Armed conflict events and fatalities",
-    "teleport": "City quality-of-life scores (housing, safety, education, healthcare)",
-    "news": "News coverage and GDELT media sentiment over time",
-    "climate": "Temperature anomalies and annual precipitation trends",
-    "employment": "Unemployment rates, youth unemployment, labour participation",
-    "aqi": "Air quality PM2.5 measurements by city",
+    "news": "Recent news events summarised around the query topic",
 }
 
 # ---------------------------------------------------------------------------
@@ -50,31 +48,31 @@ AVAILABLE_TOOLS: dict[str, str] = {
 TOOL_SELECTOR_INSTRUCTION = """You are a migration intelligence tool selector.
 
 Given a user query, decide:
-1. Which data tools to use (choose 2-5 most relevant from the list below).
+1. Which data tools to use (choose 2-4 most relevant from the list below).
 2. Which K countries to compare (extract K from the query; default 5).
 3. A suitable year range (default 2015-2023).
 
 Available tools:
-- worldbank  : GDP per capita, inflation, health spending, education spending, poverty
-- unhcr      : Refugee displacement outflows and top destination countries
-- acled      : Armed conflict events and fatalities
-- teleport   : City quality-of-life scores (housing, safety, education, healthcare)
-- news       : News articles and GDELT media sentiment timeline
-- climate    : Temperature anomalies and annual precipitation data
-- employment : Unemployment rates, youth unemployment, labour force participation
-- aqi        : Air quality PM2.5 measurements by city
+- worldbank   : GDP growth, inflation, health spending, education spending, poverty, political stability
+- employment  : Unemployment rates, youth unemployment, labour force participation
+- unhcr       : Refugee displacement outflows and top destination countries
+- environment : Climate trends (temperature anomaly, precipitation) + PM2.5 air quality — use for health/environment queries
+- acled       : Armed conflict events and fatalities — use for safety/conflict queries
+- news        : Recent news summary focused on the query topic — use when current events matter
 
 Selection rules:
-- Always include worldbank for economic / relocation queries.
-- For migration push-factor queries include unhcr + worldbank.
-- For safety queries include acled and/or teleport.
-- For environment / health queries include aqi and/or climate.
-- For economic queries include worldbank and employment.
+- Always include worldbank for economic, relocation, or quality-of-life queries.
+- For migration push-factor queries: unhcr + worldbank.
+- For safety/conflict queries: acled + worldbank.
+- For environment/health/climate queries: environment + worldbank.
+- For economic queries: worldbank + employment.
+- For current-events or sentiment queries: news + worldbank.
+- General relocation queries: worldbank + employment + unhcr.
 - Identify K distinct countries that best answer the query.
   - If specific countries are named, include them.
   - If K is not specified, default to 5.
-  - For "best countries to migrate to" queries pick top global destinations.
-- year_from / year_to should give meaningful historical context.
+  - For "best countries to migrate to" pick top global destinations (Germany, Canada, Australia etc).
+- year_from / year_to should give meaningful historical context (default 2015-2023).
 
 Return valid JSON with EXACTLY these fields (no extra keys):
 {
@@ -94,16 +92,20 @@ Given a user query and comparative country data, generate EXACTLY 3 evidence-bac
 
 Rules:
 - Each insight must cite a specific number or metric present in the data summary.
-- The 3 insights should cover different dimensions (e.g. economic, safety, environment).
-- Do NOT fabricate numbers — only use values in the data summary.
+- The 3 insights should cover DIFFERENT dimensions — do not repeat the same metric type.
+- If news headlines are included in the data summary, dedicate ONE insight to summarising
+  what recent events indicate about the query topic across countries.
+- Do NOT fabricate numbers — only use values present in the data summary.
 - title: 5-10 words, specific to the finding.
+- value: the key number or metric that anchors the insight.
 - description: 2-3 sentences explaining migration significance.
+- data_source: the tool/API the data came from.
 
 Return EXACTLY this JSON array (no extra wrapping, no markdown):
 [
   {
     "title": "Germany Leads in Economic Stability",
-    "value": "GDP per capita $48,718 (2022)",
+    "value": "GDP growth 1.8% (2022)",
     "data_source": "World Bank",
     "description": "Germany shows the strongest economic fundamentals …"
   },
@@ -162,7 +164,7 @@ async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
         print(f"[PIPELINE] Tool selector LLM failed: {exc}. Using fallback.")
         countries = ["Germany", "Canada", "Australia", "Netherlands", "Sweden"]
         return ToolSelectorOutput(
-            selected_tools=["worldbank", "employment", "aqi"],
+            selected_tools=["worldbank", "employment", "unhcr"],
             countries=countries,
             country_codes=[country_name_to_iso3(c) or c[:3].upper() for c in countries],
             k=5,
@@ -274,20 +276,6 @@ def _build_data_summary(
                                 f"  Youth unemployment: {float(yrow['youth_unemployment_rate']):.1f}%"
                             )
 
-        if "aqi" in selected_tools:
-            aqi = pd.DataFrame(dataset.get("aqi") or [])
-            if not aqi.empty and "pm25" in aqi.columns:
-                avg = aqi["pm25"].dropna().mean()
-                if pd.notna(avg):
-                    lines.append(f"  Avg PM2.5: {float(avg):.1f} μg/m³")
-
-        if "climate" in selected_tools:
-            clim = pd.DataFrame(dataset.get("climate") or [])
-            if not clim.empty and "avg_temp_anomaly_c" in clim.columns:
-                avg = clim["avg_temp_anomaly_c"].dropna().mean()
-                if pd.notna(avg):
-                    lines.append(f"  Avg temp anomaly: {float(avg):.2f}°C")
-
         if "unhcr" in selected_tools:
             disp = pd.DataFrame(dataset.get("displacement") or [])
             if not disp.empty and "value" in disp.columns:
@@ -301,12 +289,25 @@ def _build_data_summary(
                 if "fatalities" in conf.columns:
                     lines.append(f"  Total fatalities: {int(conf['fatalities'].sum()):,}")
 
-        if "teleport" in selected_tools:
-            cs = pd.DataFrame(dataset.get("city_scores") or [])
-            if not cs.empty and "score_out_of_10" in cs.columns:
-                avg = cs["score_out_of_10"].dropna().mean()
+        if "news" in selected_tools:
+            news_list = dataset.get("news") or []
+            headlines = [r.get("title", "").strip() for r in news_list if r.get("title")]
+            if headlines:
+                lines.append(f"  Recent news headlines ({len(headlines)} articles):")
+                for h in headlines[:6]:
+                    lines.append(f"    - {h}")
+
+        if "environment" in selected_tools:
+            clim = pd.DataFrame(dataset.get("climate") or [])
+            if not clim.empty and "avg_temp_anomaly_c" in clim.columns:
+                avg = clim["avg_temp_anomaly_c"].dropna().mean()
                 if pd.notna(avg):
-                    lines.append(f"  Quality-of-life score: {float(avg):.1f}/10")
+                    lines.append(f"  Avg temp anomaly: {float(avg):.2f}°C")
+            aqi = pd.DataFrame(dataset.get("aqi") or [])
+            if not aqi.empty and "pm25" in aqi.columns:
+                avg = aqi["pm25"].dropna().mean()
+                if pd.notna(avg):
+                    lines.append(f"  Avg PM2.5: {float(avg):.1f} μg/m³")
 
         if len(lines) > 1:
             parts.append("\n".join(lines))
@@ -374,6 +375,110 @@ async def generate_evidences(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+async def run_country_pipeline_streaming(
+    query: str,
+    emit: Callable[[str, Any], None],
+) -> None:
+    """SSE-aware pipeline. Calls emit(event_name, data) at each stage."""
+    from plotly.io import from_json as _plotly_from_json
+
+    reset_tracker()
+
+    # ── Stage 1: LLM selects tools + countries ──────────────────────────────
+    emit("stage", {
+        "step": 1, "total": 4,
+        "label": "AI selects tools & countries",
+        "message": "Analysing your query…",
+    })
+    selector = await analyze_query_with_llm(query)
+    emit("selection", {
+        "countries": selector.countries,
+        "country_codes": selector.country_codes,
+        "tools": selector.selected_tools,
+        "year_from": selector.year_from,
+        "year_to": selector.year_to,
+        "query_focus": selector.query_focus,
+        "k": selector.k,
+    })
+
+    # ── Stage 2: Fetch live data for every country in parallel ──────────────
+    emit("stage", {
+        "step": 2, "total": 4,
+        "label": "Collecting live data",
+        "message": f"Fetching data for {len(selector.countries)} countries in parallel…",
+    })
+    countries_data = await collect_data_for_countries(
+        selector.countries,
+        selector.country_codes,
+        selector.selected_tools,
+        selector.year_from,
+        selector.year_to,
+    )
+
+    # ── Stage 3: Build charts + evidence in parallel ─────────────────────────
+    emit("stage", {
+        "step": 3, "total": 4,
+        "label": "Building charts & insights",
+        "message": "Generating 4 comparison charts and 3 evidence insights in parallel…",
+    })
+    chart_jsons, evidences = await asyncio.gather(
+        asyncio.to_thread(
+            build_country_comparison_charts,
+            countries_data,
+            selector.selected_tools,
+            selector.query_focus,
+        ),
+        generate_evidences(query, countries_data, selector.selected_tools),
+    )
+
+    # Normalise chart JSON strings → Plotly dicts for the JS client
+    charts_normalized: list[Any] = []
+    for j in chart_jsons:
+        try:
+            fig = _plotly_from_json(j)
+            charts_normalized.append(fig.to_plotly_json())
+        except Exception:
+            pass
+
+    emit("charts", {"charts": charts_normalized})
+
+    # ── Stage 4: Finalise ────────────────────────────────────────────────────
+    emit("stage", {
+        "step": 4, "total": 4,
+        "label": "Finalising results",
+        "message": "Wrapping up…",
+    })
+
+    _tool_data_keys: dict[str, list[str]] = {
+        "worldbank":   ["worldbank"],
+        "employment":  ["employment"],
+        "unhcr":       ["displacement"],
+        "environment": ["climate", "aqi"],
+        "acled":       ["conflict_events"],
+        "news":        ["news"],
+    }
+    tool_stats: dict[str, int] = {}
+    for tool in selector.selected_tools:
+        keys = _tool_data_keys.get(tool, [tool])
+        tool_stats[tool] = sum(
+            len(dataset.get(k) or [])
+            for dataset in countries_data.values()
+            for k in keys
+        )
+
+    emit("evidence", {
+        "evidences": [e.model_dump() for e in evidences],
+        "tool_stats": tool_stats,
+        "countries": selector.countries,
+        "tools_used": selector.selected_tools,
+        "year_from": selector.year_from,
+        "year_to": selector.year_to,
+        "query_focus": selector.query_focus,
+    })
+
+    emit("done", {"message": "Analysis complete."})
+
+
 async def run_country_pipeline(query: str) -> CountryComparisonResult:
     """Execute the full 4-step country comparison pipeline."""
     reset_tracker()
@@ -408,24 +513,22 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
     )
 
     # Compute how many rows each tool returned across all countries
-    _tool_data_keys = {
-        "worldbank": "worldbank",
-        "unhcr": "displacement",
-        "acled": "conflict_events",
-        "teleport": "city_scores",
-        "news": "news",
-        "climate": "climate",
-        "employment": "employment",
-        "aqi": "aqi",
+    _tool_data_keys: dict[str, list[str]] = {
+        "worldbank":   ["worldbank"],
+        "employment":  ["employment"],
+        "unhcr":       ["displacement"],
+        "environment": ["climate", "aqi"],
+        "acled":       ["conflict_events"],
+        "news":        ["news"],
     }
     tool_stats: dict[str, int] = {}
     for tool in selector.selected_tools:
-        data_key = _tool_data_keys.get(tool, tool)
-        total = sum(
-            len(dataset.get(data_key) or [])
+        keys = _tool_data_keys.get(tool, [tool])
+        tool_stats[tool] = sum(
+            len(dataset.get(k) or [])
             for dataset in countries_data.values()
+            for k in keys
         )
-        tool_stats[tool] = total
 
     return CountryComparisonResult(
         query=query,

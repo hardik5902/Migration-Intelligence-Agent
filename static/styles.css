@@ -487,6 +487,104 @@ body {
   border: 1px solid rgba(84, 112, 123, 0.18);
 }
 
+/* ── Utility ──────────────────────────────────────────────────────────────── */
+.hidden { display: none !important; }
+
+/* ── Loading / pipeline panel ─────────────────────────────────────────────── */
+.loading-panel {
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 28px 32px;
+}
+
+.pipeline-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ps-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.ps-dot {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  transition: background 0.2s, border 0.2s;
+}
+
+.ps-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ps-text strong {
+  font-size: 0.93rem;
+}
+
+.ps-msg {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* Pending */
+.ps-pending {
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(30, 27, 24, 0.07);
+}
+.ps-pending .ps-dot {
+  background: rgba(30, 27, 24, 0.15);
+}
+.ps-pending .ps-text strong { color: var(--muted); }
+
+/* Active — spinning dot */
+.ps-active {
+  background: linear-gradient(160deg, rgba(175,63,47,0.07), rgba(126,39,31,0.04));
+  border-color: rgba(175, 63, 47, 0.2);
+}
+.ps-active .ps-dot {
+  border: 3px solid rgba(175, 63, 47, 0.25);
+  border-top-color: var(--brand);
+  background: transparent;
+  animation: spin 0.75s linear infinite;
+}
+.ps-active .ps-text strong { color: var(--brand-deep); }
+.ps-active .ps-msg { color: var(--brand-deep); opacity: 0.75; }
+
+/* Done */
+.ps-done {
+  background: rgba(45, 106, 79, 0.06);
+  border-color: rgba(45, 106, 79, 0.18);
+}
+.ps-done .ps-dot {
+  background: #2d6a4f;
+  position: relative;
+}
+.ps-done .ps-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 10 10' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 5l2.5 2.5L8 3' stroke='%23fff' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") center/10px no-repeat;
+}
+.ps-done .ps-text strong { color: #1d5c3a; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 960px) {
   .hero {

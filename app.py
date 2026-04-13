@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
+import json
 import os
+import queue
+import threading
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from flask import Flask, render_template, request
-from plotly.io import from_json
+from flask import Flask, Response, render_template, request, stream_with_context
 
-from agents.country_pipeline import AVAILABLE_TOOLS, run_country_pipeline
+from agents.country_pipeline import AVAILABLE_TOOLS, run_country_pipeline_streaming
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -24,7 +25,13 @@ TOOL_CARDS = [
         "id": "worldbank",
         "name": "World Bank",
         "icon": "📊",
-        "description": "GDP per capita, inflation, health & education spending, poverty rates",
+        "description": "GDP growth, inflation, health & education spending, poverty, political stability",
+    },
+    {
+        "id": "employment",
+        "name": "ILO Labor",
+        "icon": "💼",
+        "description": "Unemployment rates, youth unemployment, labour force participation",
     },
     {
         "id": "unhcr",
@@ -33,40 +40,22 @@ TOOL_CARDS = [
         "description": "Refugee displacement outflows and top destination countries",
     },
     {
+        "id": "environment",
+        "name": "Environment",
+        "icon": "🌿",
+        "description": "Climate trends (temperature, precipitation) + PM2.5 air quality — combined",
+    },
+    {
         "id": "acled",
         "name": "ACLED",
         "icon": "⚔️",
         "description": "Armed conflict events, fatalities, and crisis locations",
     },
     {
-        "id": "teleport",
-        "name": "Teleport",
-        "icon": "🏙️",
-        "description": "City quality-of-life: housing, safety, education, healthcare scores",
-    },
-    {
         "id": "news",
-        "name": "News + GDELT",
+        "name": "News Summary",
         "icon": "📰",
-        "description": "News coverage volume and media sentiment over time",
-    },
-    {
-        "id": "climate",
-        "name": "Open-Meteo",
-        "icon": "🌡️",
-        "description": "Temperature anomalies and annual precipitation trends",
-    },
-    {
-        "id": "employment",
-        "name": "ILO Labor",
-        "icon": "💼",
-        "description": "Unemployment rates, youth unemployment, labour participation",
-    },
-    {
-        "id": "aqi",
-        "name": "OpenAQ",
-        "icon": "💨",
-        "description": "Air quality PM2.5 measurements by city and location",
+        "description": "Recent news events summarised around your query topic per country",
     },
 ]
 
@@ -83,55 +72,67 @@ def _auth_ready() -> bool:
     )
 
 
-def _normalize_chart(fig_json: str) -> dict[str, Any] | None:
-    try:
-        fig = from_json(fig_json)
-        return fig.to_plotly_json()
-    except Exception:
-        return None
-
-
-def _base_context(query: str = "") -> dict[str, Any]:
-    return {
-        "query": query,
-        "error": None,
-        "result": None,
-        "charts": [],
-        "tool_cards": TOOL_CARDS,
-    }
+def _sse(event_name: str, data: Any) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 @app.get("/")
 def index() -> str:
-    return render_template("index.html", **_base_context())
+    return render_template("index.html", tool_cards=TOOL_CARDS)
 
 
 @app.post("/analyze")
-def analyze() -> tuple[str, int] | str:
+def analyze() -> Response:
     query = (request.form.get("query") or "").strip()
-    ctx = _base_context(query)
 
     if not query:
-        ctx["error"] = "Please enter a question before running the analysis."
-        return render_template("index.html", **ctx), 400
+        def _err():
+            yield _sse("error", {"message": "Please enter a question before running the analysis."})
+        return Response(stream_with_context(_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     if not _auth_ready():
-        ctx["error"] = (
-            "Authentication not configured. "
-            "Set GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS in your .env file."
-        )
-        return render_template("index.html", **ctx), 400
+        def _auth_err():
+            yield _sse("error", {"message": (
+                "Authentication not configured. "
+                "Set GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS in your .env file."
+            )})
+        return Response(stream_with_context(_auth_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    try:
-        result = asyncio.run(run_country_pipeline(query))
-    except Exception as exc:
-        ctx["error"] = f"Pipeline failed: {exc}"
-        return render_template("index.html", **ctx), 500
+    q: queue.Queue = queue.Queue()
 
-    charts = [c for c in (_normalize_chart(j) for j in result.chart_jsons) if c]
+    def emit(name: str, data: Any) -> None:
+        q.put((name, data))
 
-    ctx.update({"result": result, "charts": charts})
-    return render_template("index.html", **ctx)
+    def _run_pipeline() -> None:
+        import asyncio as _asyncio
+        try:
+            _asyncio.run(run_country_pipeline_streaming(query, emit))
+        except Exception as exc:
+            q.put(("error", {"message": str(exc)}))
+        finally:
+            q.put(None)  # sentinel — tells the generator to stop
+
+    threading.Thread(target=_run_pipeline, daemon=True).start()
+
+    def generate():
+        while True:
+            try:
+                item = q.get(timeout=300)
+            except queue.Empty:
+                yield _sse("error", {"message": "Pipeline timed out after 5 minutes."})
+                break
+            if item is None:
+                break
+            name, data = item
+            yield _sse(name, data)
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

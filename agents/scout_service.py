@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall, ToolSelection
-from tools import aqi_tools, climate_tools, employment_tools, news_tools, teleport_tools, unhcr_tools, worldbank_tools
+from tools import aqi_tools, climate_tools, employment_tools, environment_tools, news_tools, teleport_tools, unhcr_tools, worldbank_tools
 from tools import acled_tools
 from tools.country_codes import country_name_to_iso3, iso3_to_iso2, iso3_to_name
 from tools.duckdb_tools import cache_key, replace_table_rows, run_sql_query, should_use_cache
@@ -23,13 +23,15 @@ async def collect_migration_dataset(
     # Parse tool selection (default: all on)
     tools = {
         "worldbank": True,
-        "unhcr": True,
-        "acled": True,
-        "teleport": True,
-        "news": True,
-        "climate": True,
         "employment": True,
-        "aqi": True,
+        "unhcr": True,
+        "environment": True,
+        "acled": True,
+        "news": True,
+        # legacy keys kept for backward-compat with old tool_selection dicts
+        "climate": False,
+        "aqi": False,
+        "teleport": False,
     }
     if tool_selection:
         tools.update(tool_selection)
@@ -470,19 +472,52 @@ async def collect_migration_dataset(
         if tools["news"]:
             tracker.log_tool_call("NewsAPI", {"query": name})
             tasks_dict["news_c"] = news_c()
-        if tools["climate"]:
-            tracker.log_tool_call("Climate", {"country_code": code, "years": f"{y0}-{y1}"})
-            tasks_dict["clim"] = clim()
+        if tools["environment"] or tools["climate"] or tools["aqi"]:
+            tracker.log_tool_call("Environment", {"country_code": code, "years": f"{y0}-{y1}"})
+
+            async def env():
+                started = datetime.now(timezone.utc).isoformat()
+                try:
+                    clim_rows, aqi_rows = await environment_tools.get_environment_data(
+                        code, y0, y1, client
+                    )
+                    replace_table_rows(
+                        "climate_data", ck, clim_rows,
+                        ["country", "year", "avg_daily_max_temp_c", "annual_precipitation_mm",
+                         "avg_temp_anomaly_c", "extreme_heat_days", "endpoint_url", "fetched_at"],
+                    )
+                    iso2 = iso3_to_iso2(code) or code[:2]
+                    for r in aqi_rows:
+                        r["country"] = r.get("country") or iso2
+                    replace_table_rows(
+                        "aqi_data", ck, aqi_rows,
+                        ["country", "location", "city", "pm25", "endpoint_url", "fetched_at"],
+                    )
+                    if clim_rows:
+                        fresh["Open-Meteo"] = str(clim_rows[0].get("fetched_at", ""))
+                    if aqi_rows:
+                        fresh["OpenAQ"] = str(aqi_rows[0].get("fetched_at", ""))
+                    return clim_rows, aqi_rows
+                finally:
+                    finished = datetime.now(timezone.utc).isoformat()
+                    tool_calls.append(ToolCall(
+                        tool_name="environment.get_environment_data",
+                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
+                        from_cache=False,
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=len(locals().get("clim_rows") or []) + len(locals().get("aqi_rows") or []),
+                        source_api="Open-Meteo + OpenAQ",
+                    ))
+
+            tasks_dict["env"] = env()
+
         if tools["employment"]:
             tracker.log_tool_call("Employment", {"country_code": code, "years": f"{y0}-{y1}"})
             tasks_dict["emp"] = emp()
         if tools["acled"]:
             tracker.log_tool_call("ACLED", {"country_code": code, "date_range": f"{y0}-{y1}"})
             tasks_dict["conf"] = conf()
-        if tools["aqi"]:
-            tracker.log_tool_call("AQI", {"country_iso2": iso3_to_iso2(code) or code[:2]})
-            tasks_dict["aqi_local"] = aqi_local()
-
         # GDELT: run in parallel with other tools when news is enabled
         if tools["news"]:
             async def gdelt_t():
@@ -518,12 +553,16 @@ async def collect_migration_dataset(
         disp_rows = _unwrap_list(results.get("disp")) if "disp" in results else []
         city_rows = _unwrap_list(results.get("city")) if "city" in results else []
         news_rows = _unwrap_list(results.get("news_c")) if "news_c" in results else []
-        climate_rows = _unwrap_list(results.get("clim")) if "clim" in results else []
         emp_rows = _unwrap_list(results.get("emp")) if "emp" in results else []
         conflict_rows = _unwrap_list(results.get("conf")) if "conf" in results else []
-        aqi_rows = _unwrap_list(results.get("aqi_local")) if "aqi_local" in results else []
-        # GDELT now runs inside the gather — no separate sequential call needed
         gd = _unwrap_dict(results.get("gdelt_t")) if "gdelt_t" in results else {}
+
+        # Environment tool returns (climate_rows, aqi_rows)
+        _env_result = results.get("env") if "env" in results else None
+        if isinstance(_env_result, tuple) and len(_env_result) == 2:
+            climate_rows, aqi_rows = _env_result[0] or [], _env_result[1] or []
+        else:
+            climate_rows, aqi_rows = [], []
 
     extra_disp: list = []
     if intent.intent == "historical":

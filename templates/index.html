@@ -71,131 +71,350 @@
 
       <!-- ── Query panel ───────────────────────────────────────────────────── -->
       <section class="query-panel">
-        <form action="{{ url_for('analyze') }}" method="post">
+        <form id="analyze-form">
           <label for="query">Ask about countries, migration, or quality of life</label>
           <textarea
             id="query"
             name="query"
             rows="4"
             placeholder="e.g. Which 5 countries have the best quality of life for migrants?&#10;e.g. Compare economic stability in Germany, Canada and Australia&#10;e.g. Top 3 safest countries with clean air for relocation"
-          >{{ query }}</textarea>
+          ></textarea>
           <div class="query-footer">
-            <button type="submit" class="run-btn">Run Analysis</button>
+            <button type="submit" class="run-btn" id="run-btn">Run Analysis</button>
             <p class="query-hint">
               Mention a number like <em>"top 3"</em> or <em>"compare 7 countries"</em> to set K
               (default: 5). The AI chooses data sources automatically.
             </p>
           </div>
         </form>
-        {% if error %}
-        <div class="error-box">{{ error }}</div>
-        {% endif %}
+        <div id="error-box" class="error-box hidden"></div>
       </section>
 
-      <!-- ── Results ───────────────────────────────────────────────────────── -->
-      {% if result %}
-      <section class="results-shell">
+      <!-- ── Loading panel (shown while streaming) ─────────────────────────── -->
+      <section id="loading-panel" class="loading-panel hidden">
+        <p class="eyebrow">Running Analysis</p>
+        <div class="pipeline-steps">
+          <div class="ps-item ps-pending" id="ps-1">
+            <div class="ps-dot"></div>
+            <div class="ps-text">
+              <strong>AI selects tools &amp; countries</strong>
+              <span class="ps-msg">Waiting…</span>
+            </div>
+          </div>
+          <div class="ps-item ps-pending" id="ps-2">
+            <div class="ps-dot"></div>
+            <div class="ps-text">
+              <strong>Collecting live data</strong>
+              <span class="ps-msg">Waiting…</span>
+            </div>
+          </div>
+          <div class="ps-item ps-pending" id="ps-3">
+            <div class="ps-dot"></div>
+            <div class="ps-text">
+              <strong>Building charts &amp; insights</strong>
+              <span class="ps-msg">Waiting…</span>
+            </div>
+          </div>
+          <div class="ps-item ps-pending" id="ps-4">
+            <div class="ps-dot"></div>
+            <div class="ps-text">
+              <strong>Finalising results</strong>
+              <span class="ps-msg">Waiting…</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Results shell (populated progressively by JS) ─────────────────── -->
+      <section id="results-shell" class="results-shell hidden">
 
         <!-- Result header: countries + tools + period -->
-        <section class="result-header">
+        <section id="result-header-panel" class="result-header hidden">
           <div class="result-meta-grid">
             <div class="meta-block">
               <p class="eyebrow">Countries Analysed</p>
-              <div class="chip-row">
-                {% for country in result.countries %}
-                <span class="chip chip-country">{{ country }}</span>
-                {% endfor %}
-              </div>
+              <div class="chip-row" id="countries-chips"></div>
+            </div>
+            <div class="meta-block">
+              <p class="eyebrow">Tools Used</p>
+              <div class="chip-row" id="tools-chips"></div>
             </div>
             <div class="meta-block meta-block-narrow">
               <p class="eyebrow">Period</p>
-              <strong class="period-label">{{ result.year_from }} – {{ result.year_to }}</strong>
+              <strong class="period-label" id="period-label"></strong>
             </div>
           </div>
-          {% if result.query_focus %}
-          <p class="query-focus-text">{{ result.query_focus }}</p>
-          {% endif %}
+          <p class="query-focus-text hidden" id="query-focus-text"></p>
         </section>
 
-        <!-- Tool status: which tools ran and how much data they returned -->
-        {% if result.tool_stats %}
-        <section class="tool-status-card">
+        <!-- Tool status -->
+        <section id="tool-status-panel" class="tool-status-card hidden">
           <p class="eyebrow">Data Collection Status</p>
-          <div class="tool-status-grid">
-            {% for tool in result.tools_used %}
-            {% set rows = result.tool_stats.get(tool, 0) %}
-            <div class="tool-status-item {% if rows > 0 %}ts-ok{% else %}ts-empty{% endif %}">
-              <span class="ts-name">{{ tool }}</span>
-              <span class="ts-badge">
-                {% if rows > 0 %}
-                  ✓ {{ rows }} rows
-                {% else %}
-                  ⚠ no data
-                {% endif %}
-              </span>
-            </div>
-            {% endfor %}
-          </div>
+          <div class="tool-status-grid" id="tool-status-grid"></div>
         </section>
-        {% endif %}
 
         <!-- 4 Charts in 2 × 2 grid -->
-        {% if charts %}
-        <section class="charts-section">
+        <section id="charts-panel" class="charts-section hidden">
           <div class="section-heading">
             <p class="eyebrow">Data Visualisation</p>
             <h2>Comparative analysis across countries</h2>
           </div>
-          <div class="charts-grid">
-            {% for chart in charts %}
-            <article class="chart-card">
-              <div id="chart-{{ loop.index0 }}" class="plot-surface"></div>
-            </article>
-            {% endfor %}
-          </div>
+          <div class="charts-grid" id="charts-grid"></div>
         </section>
-        {% endif %}
 
         <!-- 3 Evidence insights -->
-        {% if result.evidences %}
-        <section class="evidence-section">
+        <section id="evidence-panel" class="evidence-section hidden">
           <div class="section-heading">
             <p class="eyebrow">Key Findings</p>
             <h2>3 evidence-backed insights</h2>
           </div>
-          <div class="evidence-grid">
-            {% for ev in result.evidences %}
-            <article class="evidence-card">
-              <div class="evidence-num">{{ loop.index }}</div>
-              <div class="evidence-body">
-                <h3>{{ ev.title }}</h3>
-                <p class="evidence-value">{{ ev.value }}</p>
-                <p class="evidence-desc">{{ ev.description }}</p>
-                <span class="evidence-source">{{ ev.data_source }}</span>
-              </div>
-            </article>
-            {% endfor %}
-          </div>
+          <div class="evidence-grid" id="evidence-grid"></div>
         </section>
-        {% endif %}
 
-      </section>
-      {% endif %}
+      </section><!-- /#results-shell -->
 
     </div><!-- /.page-shell -->
 
-    {% if charts %}
     <script>
-      const chartsData = {{ charts | tojson }};
-      chartsData.forEach((chart, i) => {
-        Plotly.newPlot(
-          `chart-${i}`,
-          chart.data,
-          chart.layout,
-          { responsive: true, displayModeBar: false }
-        );
+    (() => {
+      const form      = document.getElementById('analyze-form');
+      const runBtn    = document.getElementById('run-btn');
+      const errorBox  = document.getElementById('error-box');
+      const loadPanel = document.getElementById('loading-panel');
+      const resShell  = document.getElementById('results-shell');
+
+      // ── Helpers ────────────────────────────────────────────────────────────
+      const show = el => el.classList.remove('hidden');
+      const hide = el => el.classList.add('hidden');
+      const $    = id => document.getElementById(id);
+
+      function setStep(step, msg) {
+        for (let i = 1; i <= 4; i++) {
+          const el = $(`ps-${i}`);
+          el.classList.remove('ps-pending', 'ps-active', 'ps-done');
+          if (i < step)       el.classList.add('ps-done');
+          else if (i === step) el.classList.add('ps-active');
+          else                 el.classList.add('ps-pending');
+        }
+        if (msg) {
+          const msgEl = $(`ps-${step}`)?.querySelector('.ps-msg');
+          if (msgEl) msgEl.textContent = msg;
+        }
+      }
+
+      function showError(msg) {
+        errorBox.textContent = msg;
+        show(errorBox);
+        hide(loadPanel);
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run Analysis';
+      }
+
+      function resetUI() {
+        hide(errorBox);
+        hide(resShell);
+        // Reset all panels inside results-shell
+        ['result-header-panel','tool-status-panel','charts-panel','evidence-panel']
+          .forEach(id => hide($(id)));
+        // Clear dynamic content
+        $('countries-chips').innerHTML = '';
+        $('tools-chips').innerHTML = '';
+        $('period-label').textContent = '';
+        $('query-focus-text').textContent = '';
+        hide($('query-focus-text'));
+        $('tool-status-grid').innerHTML = '';
+        $('charts-grid').innerHTML = '';
+        $('evidence-grid').innerHTML = '';
+        // Reset step indicators
+        for (let i = 1; i <= 4; i++) {
+          const el = $(`ps-${i}`);
+          el.classList.remove('ps-active','ps-done');
+          el.classList.add('ps-pending');
+          el.querySelector('.ps-msg').textContent = 'Waiting…';
+        }
+      }
+
+      // ── SSE event handlers ─────────────────────────────────────────────────
+      function onStage(d) {
+        setStep(d.step, d.message);
+      }
+
+      function onSelection(d) {
+        // Populate header immediately when we know countries + tools
+        const countriesEl = $('countries-chips');
+        d.countries.forEach(c => {
+          const span = document.createElement('span');
+          span.className = 'chip chip-country';
+          span.textContent = c;
+          countriesEl.appendChild(span);
+        });
+
+        const toolsEl = $('tools-chips');
+        d.tools.forEach(t => {
+          const span = document.createElement('span');
+          span.className = 'chip chip-tool';
+          span.textContent = t;
+          toolsEl.appendChild(span);
+        });
+
+        $('period-label').textContent = `${d.year_from} – ${d.year_to}`;
+
+        if (d.query_focus) {
+          const qf = $('query-focus-text');
+          qf.textContent = d.query_focus;
+          show(qf);
+        }
+
+        show($('result-header-panel'));
+        show(resShell);
+      }
+
+      function onCharts(d) {
+        const grid = $('charts-grid');
+        grid.innerHTML = '';
+        (d.charts || []).forEach((chart, i) => {
+          const article = document.createElement('article');
+          article.className = 'chart-card';
+          const div = document.createElement('div');
+          div.id = `chart-${i}`;
+          div.className = 'plot-surface';
+          article.appendChild(div);
+          grid.appendChild(article);
+          Plotly.newPlot(`chart-${i}`, chart.data, chart.layout,
+            { responsive: true, displayModeBar: false });
+        });
+        if (d.charts && d.charts.length) {
+          show($('charts-panel'));
+        }
+      }
+
+      function onEvidence(d) {
+        // Tool status badges
+        const tsGrid = $('tool-status-grid');
+        tsGrid.innerHTML = '';
+        (d.tools_used || []).forEach(tool => {
+          const rows = (d.tool_stats || {})[tool] || 0;
+          const item = document.createElement('div');
+          item.className = `tool-status-item ${rows > 0 ? 'ts-ok' : 'ts-empty'}`;
+          item.innerHTML = `
+            <span class="ts-name">${tool}</span>
+            <span class="ts-badge">${rows > 0 ? `✓ ${rows} rows` : '⚠ no data'}</span>`;
+          tsGrid.appendChild(item);
+        });
+        if (d.tools_used && d.tools_used.length) {
+          show($('tool-status-panel'));
+        }
+
+        // Evidence cards
+        const evGrid = $('evidence-grid');
+        evGrid.innerHTML = '';
+        (d.evidences || []).forEach((ev, i) => {
+          const article = document.createElement('article');
+          article.className = 'evidence-card';
+          article.innerHTML = `
+            <div class="evidence-num">${i + 1}</div>
+            <div class="evidence-body">
+              <h3>${ev.title || ''}</h3>
+              <p class="evidence-value">${ev.value || ''}</p>
+              <p class="evidence-desc">${ev.description || ''}</p>
+              <span class="evidence-source">${ev.data_source || ''}</span>
+            </div>`;
+          evGrid.appendChild(article);
+        });
+        if (d.evidences && d.evidences.length) {
+          show($('evidence-panel'));
+        }
+      }
+
+      function onDone() {
+        // Mark all steps done
+        for (let i = 1; i <= 4; i++) {
+          const el = $(`ps-${i}`);
+          el.classList.remove('ps-pending','ps-active');
+          el.classList.add('ps-done');
+        }
+        $(`ps-4`).querySelector('.ps-msg').textContent = 'Complete!';
+        setTimeout(() => hide(loadPanel), 1200);
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run Analysis';
+      }
+
+      // ── SSE stream reader ──────────────────────────────────────────────────
+      async function runAnalysis(query) {
+        const formData = new FormData();
+        formData.append('query', query);
+
+        let response;
+        try {
+          response = await fetch('/analyze', { method: 'POST', body: formData });
+        } catch (err) {
+          showError(`Network error: ${err.message}`);
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          let chunk;
+          try {
+            chunk = await reader.read();
+          } catch (err) {
+            showError(`Stream error: ${err.message}`);
+            break;
+          }
+          if (chunk.done) break;
+
+          buffer += decoder.decode(chunk.value, { stream: true });
+
+          // Split on double-newline (SSE event boundary)
+          const events = buffer.split('\n\n');
+          buffer = events.pop(); // keep incomplete tail
+
+          for (const rawEvent of events) {
+            if (!rawEvent.trim()) continue;
+            let eventName = 'message';
+            let dataStr   = '';
+            for (const line of rawEvent.split('\n')) {
+              if (line.startsWith('event:')) eventName = line.slice(6).trim();
+              else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+            }
+            let data = {};
+            try { data = JSON.parse(dataStr); } catch (_) {}
+
+            switch (eventName) {
+              case 'stage':     onStage(data);    break;
+              case 'selection': onSelection(data); break;
+              case 'charts':    onCharts(data);    break;
+              case 'evidence':  onEvidence(data);  break;
+              case 'done':      onDone();           break;
+              case 'error':
+                showError(data.message || 'An unexpected error occurred.');
+                break;
+            }
+          }
+        }
+      }
+
+      // ── Form submit intercept ──────────────────────────────────────────────
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const query = ($('query').value || '').trim();
+        if (!query) {
+          showError('Please enter a question before running the analysis.');
+          return;
+        }
+
+        resetUI();
+        show(loadPanel);
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running…';
+        setStep(1, 'Analysing your query…');
+
+        await runAnalysis(query);
       });
+    })();
     </script>
-    {% endif %}
   </body>
 </html>
