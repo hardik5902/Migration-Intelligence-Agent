@@ -194,6 +194,34 @@ def _scalar_teleport(dataset: dict) -> float | None:
     return float(v) if pd.notna(v) else None
 
 
+def _scalar_health_expenditure(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "health_expenditure_gdp")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_physicians(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "physicians_per_1000")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_education(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "education_spend_gdp")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_poverty(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "poverty_headcount")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
 # ── Line chart builder (time series per country) ───────────────────────────────
 
 def _build_line_chart(
@@ -417,6 +445,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Labour (line) ──────────────────────────────────────────────────────
         {
             "type": "line",
+            "data_key": "unemployment_rate",
             "extractor": lambda d: _emp_series(d, "unemployment_rate"),
             "title": "Unemployment Rate (%)",
             "yaxis_title": "% of labour force",
@@ -425,6 +454,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Area: GDP per capita trajectory (worldbank only) ─────────────────
         {
             "type": "area",
+            "data_key": "gdp_per_capita",
             "extractor": lambda d: _wb_series(d, "gdp_per_capita_usd"),
             "title": "GDP per Capita Trajectory — Filled Area (USD)",
             "yaxis_title": "GDP per Capita (USD)",
@@ -443,6 +473,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Bar: snapshot GDP per capita (worldbank only) ─────────────────────
         {
             "type": "bar",
+            "data_key": "gdp_per_capita",
             "extractor": _scalar_gdp_per_capita,
             "title": "GDP per Capita — Latest Snapshot (USD)",
             "yaxis_title": "USD per capita",
@@ -463,14 +494,6 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "% youth labour",
             "source": "ILO / World Bank",
         },
-        # ── Area: inflation trend (worldbank only) ────────────────────────────
-        {
-            "type": "area",
-            "extractor": lambda d: _wb_series(d, "inflation"),
-            "title": "Inflation Trend — Filled Area (%)",
-            "yaxis_title": "CPI Annual %",
-            "source": "World Bank",
-        },
         # ── Inequality / governance ────────────────────────────────────────────
         {
             "type": "line",
@@ -486,6 +509,80 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Score",
             "source": "World Bank WGI",
         },
+        # ── Health & Education ─────────────────────────────────────────────────
+        {
+            "type": "line",
+            "data_key": "health_expenditure_gdp",
+            "extractor": lambda d: _wb_series(d, "health_expenditure_gdp"),
+            "title": "Health Expenditure (% of GDP)",
+            "yaxis_title": "% of GDP",
+            "source": "World Bank",
+        },
+        {
+            "type": "bar",
+            "data_key": "health_expenditure_gdp",
+            "extractor": _scalar_health_expenditure,
+            "title": "Health Expenditure — Latest Snapshot (% GDP)",
+            "yaxis_title": "% of GDP",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        {
+            "type": "bar",
+            "data_key": "physicians_per_1000",
+            "extractor": _scalar_physicians,
+            "title": "Physicians per 1,000 People",
+            "yaxis_title": "Physicians / 1,000",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        {
+            "type": "line",
+            "data_key": "education_spend_gdp",
+            "extractor": lambda d: _wb_series(d, "education_spend_gdp"),
+            "title": "Education Spending (% of GDP)",
+            "yaxis_title": "% of GDP",
+            "source": "World Bank",
+        },
+        {
+            "type": "bar",
+            "data_key": "education_spend_gdp",
+            "extractor": _scalar_education,
+            "title": "Education Spending — Latest Snapshot (% GDP)",
+            "yaxis_title": "% of GDP",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Poverty ────────────────────────────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "poverty_headcount",
+            "extractor": _scalar_poverty,
+            "title": "Poverty Headcount — National Poverty Line (%)",
+            "yaxis_title": "% of population",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Scatter: health spend vs physicians ───────────────────────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_health_expenditure,
+            "y_extractor": _scalar_physicians,
+            "title": "Healthcare Investment: Spending vs Physician Density",
+            "xaxis_title": "Health Expenditure (% GDP)",
+            "yaxis_title": "Physicians per 1,000",
+            "source": "World Bank",
+        },
+        # ── Scatter: poverty vs GDP per capita ─────────────────────────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_gdp_per_capita,
+            "y_extractor": _scalar_poverty,
+            "title": "Wealth vs Poverty: GDP per Capita vs Poverty Rate",
+            "xaxis_title": "GDP per Capita (USD)",
+            "yaxis_title": "Poverty Headcount (%)",
+            "source": "World Bank",
+        },
         # ── Scatter: GDP per capita vs GDP growth (worldbank only) ────────────
         {
             "type": "scatter",
@@ -495,14 +592,6 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "xaxis_title": "GDP per Capita (USD)",
             "yaxis_title": "GDP Growth (%)",
             "source": "World Bank",
-        },
-        # ── Area: unemployment trend (employment only) ────────────────────────
-        {
-            "type": "area",
-            "extractor": lambda d: _emp_series(d, "unemployment_rate"),
-            "title": "Unemployment Trend — Filled Area (%)",
-            "yaxis_title": "% of labour force",
-            "source": "ILO / World Bank",
         },
         # ── Climate ────────────────────────────────────────────────────────────
         {
@@ -530,15 +619,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "reference_label": "WHO 15 μg/m³",
             "ascending": False,
         },
-        # ── Migration / safety snapshot (bar) ─────────────────────────────────
-        {
-            "type": "bar",
-            "extractor": _scalar_disp,
-            "title": "UNHCR Refugee Displacement Outflow",
-            "yaxis_title": "Persons",
-            "source": "UNHCR",
-            "ascending": False,
-        },
+        # ── Safety snapshot (bar) ─────────────────────────────────────────────
         {
             "type": "bar",
             "extractor": _scalar_conflict,
@@ -554,21 +635,6 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Score /10",
             "source": "Teleport",
             "ascending": True,
-        },
-        # ── Area: displacement outflow ──────────────────────────────────────────
-        {
-            "type": "area",
-            "extractor": lambda d: (
-                (lambda disp:
-                    disp.groupby("year", as_index=False)["value"]
-                    .sum().sort_values("year")
-                    if not disp.empty and {"year", "value"}.issubset(disp.columns)
-                    else None
-                )(pd.DataFrame(d.get("displacement") or []))
-            ),
-            "title": "Refugee Displacement Outflow over Time (filled area)",
-            "yaxis_title": "Persons displaced",
-            "source": "UNHCR",
         },
         # ── Area: temperature anomaly ───────────────────────────────────────────
         {
@@ -648,6 +714,7 @@ def build_country_comparison_charts(
     #   Pass 2 (relaxed): cap each type at 2 to fill remaining slots.
     #   Pass 3 (final fill): any leftover candidates, no type cap.
     seen_titles: set[str] = set()
+    seen_data_keys: set[str] = set()
     chosen: list[dict] = []
 
     def _pick(max_per_type: int | None) -> None:
@@ -661,10 +728,16 @@ def build_country_comparison_charts(
             key = metric["title"]
             if key in seen_titles:
                 continue
+            # Deduplicate by underlying data — prevents two charts of the same series
+            data_key = metric.get("data_key")
+            if data_key and data_key in seen_data_keys:
+                continue
             mtype = metric.get("type", "line")
             if max_per_type is not None and type_counts.get(mtype, 0) >= max_per_type:
                 continue
             seen_titles.add(key)
+            if data_key:
+                seen_data_keys.add(data_key)
             type_counts[mtype] = type_counts.get(mtype, 0) + 1
             chosen.append(metric)
 

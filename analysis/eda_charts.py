@@ -445,10 +445,12 @@ def build_eda_charts(
         if hint == "correlation_heatmap":
             return _build_correlation_heatmap(latest_matrix)
         if hint == "growth_rate_bar":
-            # Prefer level series (gdp_per_capita) so CAGR is meaningful;
-            # fall back to rate series only if no level data exists.
+            # Priority: conflict/displacement level series first, then economic
             best = next(
-                (m for m in ["gdp_per_capita", "unemployment", "temp_anomaly", "gdp_growth"]
+                (m for m in [
+                    "displacement", "conflict_events", "fatalities",
+                    "gdp_per_capita", "unemployment", "temp_anomaly", "gdp_growth",
+                ]
                  if any(
                      growth_rates.get(c, {}).get(m, {}).get("cagr") is not None
                      for c in growth_rates
@@ -457,6 +459,7 @@ def build_eda_charts(
             )
             return _build_cagr_bar(growth_rates, best)
         if hint == "anomaly_timeline":
+            # Pick anomaly in the most relevant metric (first one found)
             anomaly_metric = next(
                 (anom_list[0]["metric"]
                  for anom_list in anomalies.values() if anom_list),
@@ -464,8 +467,12 @@ def build_eda_charts(
             )
             return _build_anomaly_timeline(countries_data, anomalies, anomaly_metric)
         if hint == "distribution_box":
+            # Priority: conflict/safety metrics first, then economic
             best = next(
-                (m for m in ["gdp_growth", "unemployment", "inflation", "temp_anomaly"]
+                (m for m in [
+                    "conflict_events", "fatalities", "political_stability",
+                    "displacement", "unemployment", "gdp_growth", "inflation", "temp_anomaly",
+                ]
                  if sum(1 for c in stats_summary if stats_summary[c].get(m, {}).get("n", 0) >= 2) >= 2),
                 "gdp_growth",
             )
@@ -482,9 +489,9 @@ def build_eda_charts(
         if fig is not None:
             charts.append(fig)
 
-    # Fallback: try each chart type if nothing rendered yet
+    # Fallback: prefer statistical charts (distribution/heatmap) over time-series
     if not charts:
-        for fallback in ["growth_rate_bar", "distribution_box", "anomaly_timeline", "correlation_heatmap"]:
+        for fallback in ["distribution_box", "correlation_heatmap", "anomaly_timeline", "growth_rate_bar"]:
             if fallback not in attempted:
                 fig = _try(fallback)
                 if fig is not None:

@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cache Inspector · Migration Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+      /* ── Cache-page specific styles ─────────────────────────────────────── */
+      .cache-header {
+        padding: 32px 36px;
+      }
+      .cache-header h1 {
+        font-family: "Source Serif 4", serif;
+        font-size: clamp(1.8rem, 2.8vw, 2.8rem);
+        margin: 6px 0 10px;
+        line-height: 1.1;
+      }
+      .cache-header .db-path {
+        font-size: 0.82rem;
+        color: var(--muted);
+        font-family: "Space Grotesk", monospace;
+        word-break: break-all;
+      }
+      .cache-header-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .btn-clear {
+        background: var(--brand);
+        color: #fff;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 10px 22px;
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 700;
+        font-size: 0.88rem;
+        cursor: pointer;
+        letter-spacing: 0.04em;
+        transition: background 0.15s;
+      }
+      .btn-clear:hover { background: var(--brand-deep); }
+
+      .btn-back {
+        color: var(--brand);
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.88rem;
+        letter-spacing: 0.04em;
+      }
+      .btn-back:hover { text-decoration: underline; }
+
+      .error-box {
+        background: #fdf2f1;
+        border: 1px solid rgba(175, 63, 47, 0.35);
+        border-radius: var(--radius-sm);
+        padding: 16px 20px;
+        color: var(--brand-deep);
+        font-size: 0.9rem;
+      }
+
+      /* ── Table grid ─────────────────────────────────────────────────────── */
+      .tables-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 18px;
+      }
+      .table-card {
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+      .table-card-header {
+        padding: 18px 22px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .table-card-header h3 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+      }
+      .row-badge {
+        background: var(--brand);
+        color: #fff;
+        border-radius: 100px;
+        padding: 3px 10px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .row-badge.empty {
+        background: var(--muted);
+      }
+      .ttl-line {
+        font-size: 0.78rem;
+        color: var(--muted);
+        padding: 6px 22px 0;
+      }
+      .country-rows {
+        padding: 10px 22px 14px;
+      }
+      .country-rows-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      .country-rows-table td {
+        padding: 3px 0;
+        color: var(--text);
+      }
+      .country-rows-table td:last-child {
+        text-align: right;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .no-data {
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-style: italic;
+        padding: 6px 0;
+      }
+
+      /* ── Cache meta / TTL section ────────────────────────────────────────── */
+      .meta-section {
+        border-top: 1px solid var(--line);
+        padding: 10px 22px 14px;
+      }
+      .meta-section h4 {
+        margin: 0 0 8px;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .meta-entry {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 0.8rem;
+        border-bottom: 1px solid var(--line);
+      }
+      .meta-entry:last-child { border-bottom: none; }
+      .meta-key {
+        font-family: "Space Grotesk", monospace;
+        font-size: 0.75rem;
+        color: var(--teal);
+        word-break: break-all;
+        flex: 1;
+      }
+      .ttl-badge {
+        border-radius: 100px;
+        padding: 2px 9px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .ttl-badge.valid {
+        background: #d4edda;
+        color: #155724;
+      }
+      .ttl-badge.expired {
+        background: #f8d7da;
+        color: #721c24;
+      }
+
+      /* ── Samples section ────────────────────────────────────────────────── */
+      .samples-section {
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow);
+        padding: 28px 32px;
+      }
+      .samples-section h2 {
+        font-family: "Source Serif 4", serif;
+        font-size: 1.5rem;
+        margin: 0 0 4px;
+      }
+      .samples-section > p {
+        color: var(--muted);
+        font-size: 0.87rem;
+        margin: 0 0 20px;
+      }
+      details {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        margin-bottom: 12px;
+        overflow: hidden;
+      }
+      summary {
+        padding: 12px 18px;
+        font-weight: 700;
+        font-size: 0.9rem;
+        cursor: pointer;
+        background: var(--panel-strong);
+        user-select: none;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      summary::-webkit-details-marker { display: none; }
+      summary::before {
+        content: "▶";
+        font-size: 0.65rem;
+        transition: transform 0.15s;
+        display: inline-block;
+        color: var(--brand);
+      }
+      details[open] summary::before { transform: rotate(90deg); }
+
+      .sample-scroll {
+        overflow-x: auto;
+        padding: 12px 18px;
+        background: var(--bg);
+      }
+      .sample-table {
+        border-collapse: collapse;
+        font-size: 0.78rem;
+        white-space: nowrap;
+        width: 100%;
+      }
+      .sample-table th {
+        background: var(--panel-strong);
+        padding: 6px 10px;
+        text-align: left;
+        font-weight: 700;
+        border-bottom: 2px solid var(--line);
+        color: var(--teal);
+        font-size: 0.73rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .sample-table td {
+        padding: 5px 10px;
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sample-table tr:last-child td { border-bottom: none; }
+
+      /* ── Nav bar ─────────────────────────────────────────────────────────── */
+      .cache-nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow);
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .cache-nav-brand {
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: var(--text);
+      }
+      .cache-nav-brand span { color: var(--brand); }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+
+      <!-- ── Nav ─────────────────────────────────────────────────────────── -->
+      <nav class="cache-nav">
+        <div class="cache-nav-brand">Migration Intelligence <span>· Cache Inspector</span></div>
+        <a class="btn-back" href="/">← Back to Agent</a>
+      </nav>
+
+      <!-- ── Header ──────────────────────────────────────────────────────── -->
+      <div class="cache-header" style="background:var(--panel);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow);">
+        <p class="eyebrow">DuckDB Cache</p>
+        <h1>Cache Inspector</h1>
+        <p class="db-path">📂 {{ db_path }}</p>
+
+        {% if error %}
+        <div class="error-box" style="margin-top:14px;">
+          <strong>Connection error:</strong> {{ error }}
+        </div>
+        {% endif %}
+
+        <div class="cache-header-actions">
+          <p style="margin:0;color:var(--muted);font-size:0.85rem;">
+            {{ tables | length }} cache table{% if tables|length != 1 %}s{% endif %} ·
+            {{ tables | sum(attribute='total_rows') | int }} total rows
+          </p>
+          <form method="POST" action="/cache/clear"
+                onsubmit="return confirm('Clear all cached data? This cannot be undone.');">
+            <button type="submit" class="btn-clear">🗑 Clear All Cache</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- ── Table cards ──────────────────────────────────────────────────── -->
+      {% if tables %}
+      <div class="tables-grid">
+        {% for tbl in tables %}
+        <div class="table-card">
+          <div class="table-card-header">
+            <h3>{{ tbl.name }}</h3>
+            <span class="row-badge {% if tbl.total_rows == 0 %}empty{% endif %}">
+              {{ tbl.total_rows }} rows
+            </span>
+          </div>
+          <div class="ttl-line">TTL: {{ tbl.ttl_hours }}h</div>
+
+          <!-- Per-country row counts -->
+          <div class="country-rows">
+            {% if tbl.country_rows %}
+            <table class="country-rows-table">
+              {% for row in tbl.country_rows %}
+              <tr>
+                <td>{{ row.country }}</td>
+                <td>{{ row.rows }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% else %}
+            <p class="no-data">No rows cached yet.</p>
+            {% endif %}
+          </div>
+
+          <!-- Cache meta TTL entries -->
+          {% if tbl.meta %}
+          <div class="meta-section">
+            <h4>Cache keys</h4>
+            {% for m in tbl.meta %}
+            <div class="meta-entry">
+              <span class="meta-key">{{ m.cache_key }}</span>
+              <span class="ttl-badge {% if m.valid %}valid{% else %}expired{% endif %}">
+                {% if m.valid %}
+                  ✓ {{ m.expires_in }}
+                {% else %}
+                  ✗ expired
+                {% endif %}
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- ── Sample rows ─────────────────────────────────────────────────── -->
+      {% if samples %}
+      <div class="samples-section">
+        <p class="eyebrow">Sample Data</p>
+        <h2>Row Previews</h2>
+        <p>First 5 rows from each populated cache table.</p>
+
+        {% for table_name, rows in samples.items() %}
+        <details>
+          <summary>{{ table_name }} <span style="color:var(--muted);font-weight:400;">({{ rows | length }} rows shown)</span></summary>
+          <div class="sample-scroll">
+            <table class="sample-table">
+              <thead>
+                <tr>
+                  {% for col in rows[0].keys() %}
+                  <th>{{ col }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                <tr>
+                  {% for val in row.values() %}
+                  <td title="{{ val }}">{{ val }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+    </div>
+  </body>
+</html>

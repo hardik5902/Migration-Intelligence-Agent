@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall, ToolSelection
-from tools import aqi_tools, climate_tools, employment_tools, environment_tools, news_tools, teleport_tools, unhcr_tools, worldbank_tools
+from tools import aqi_tools, climate_tools, employment_tools, environment_tools, news_tools, teleport_tools, worldbank_tools
 from tools import acled_tools
 from tools.country_codes import country_name_to_iso3, iso3_to_iso2, iso3_to_name
 from tools.duckdb_tools import cache_key, replace_table_rows, run_sql_query, should_use_cache
@@ -24,7 +24,6 @@ async def collect_migration_dataset(
     tools = {
         "worldbank": True,
         "employment": True,
-        "unhcr": True,
         "environment": True,
         "acled": True,
         "news": True,
@@ -105,63 +104,6 @@ async def collect_migration_dataset(
                         endpoint_url=locals().get('endpoint_url', None),
                         source_api="World Bank API",
                         error=locals().get('err_str', None) or None,
-                    )
-                )
-
-        async def disp():
-            started = datetime.now(timezone.utc).isoformat()
-            try:
-                if should_use_cache("displacement_data", ck):
-                    rows = run_sql_query(f"SELECT * FROM displacement_data WHERE cache_key = '{ck}'")
-                    from_cache = True
-                else:
-                    res = await unhcr_tools.get_displacement_data(code, y0, y1, client)
-                    # support tools that return (rows, endpoint_url) or (rows, endpoint_url, error)
-                    if isinstance(res, tuple):
-                        if len(res) == 3:
-                            rows, endpoint_url, error = res
-                        elif len(res) == 2:
-                            rows, endpoint_url = res
-                            error = None
-                        else:
-                            rows = res
-                            endpoint_url = None
-                            error = None
-                    else:
-                        rows = res
-                        endpoint_url = None
-                        error = None
-                    from_cache = False
-                    replace_table_rows(
-                        "displacement_data",
-                        ck,
-                        rows,
-                        [
-                            "country",
-                            "year",
-                            "metric",
-                            "value",
-                            "coa",
-                            "coa_name",
-                            "endpoint_url",
-                            "fetched_at",
-                        ],
-                    )
-                if rows:
-                    fresh["UNHCR"] = str(rows[0].get("fetched_at", ""))
-                return rows
-            finally:
-                finished = datetime.now(timezone.utc).isoformat()
-                tool_calls.append(
-                    ToolCall(
-                        tool_name="unhcr.get_displacement_data",
-                        params={"country_code": code, "year_from": str(y0), "year_to": str(y1)},
-                        from_cache=locals().get('from_cache', False),
-                        started_at=started,
-                        finished_at=finished,
-                        rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
-                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
-                        source_api="UNHCR API",
                     )
                 )
 
@@ -463,9 +405,6 @@ async def collect_migration_dataset(
         if tools["worldbank"]:
             tracker.log_tool_call("World Bank", {"country_code": code, "years": f"{y0}-{y1}"})
             tasks_dict["eco"] = eco()
-        if tools["unhcr"]:
-            tracker.log_tool_call("UNHCR", {"country_code": code, "years": f"{y0}-{y1}"})
-            tasks_dict["disp"] = disp()
         if tools["teleport"]:
             tracker.log_tool_call("Teleport", {"query": name})
             tasks_dict["city"] = city()
@@ -550,7 +489,6 @@ async def collect_migration_dataset(
         results = {name: bundled[i] for i, name in enumerate(task_names)}
 
         world_rows, _wb_urls = _unwrap_pair(results.get("eco")) if "eco" in results else ([], [])
-        disp_rows = _unwrap_list(results.get("disp")) if "disp" in results else []
         city_rows = _unwrap_list(results.get("city")) if "city" in results else []
         news_rows = _unwrap_list(results.get("news_c")) if "news_c" in results else []
         emp_rows = _unwrap_list(results.get("emp")) if "emp" in results else []
@@ -564,34 +502,6 @@ async def collect_migration_dataset(
         else:
             climate_rows, aqi_rows = [], []
 
-    extra_disp: list = []
-    if intent.intent == "historical":
-        for extra in ("SYR", "ZWE"):
-            if extra == code:
-                continue
-            ck2 = cache_key(extra, y0, y1)
-            if not should_use_cache("displacement_data", ck2):
-                async with httpx.AsyncClient(timeout=90.0) as c2:
-                    r2, _ = await unhcr_tools.get_displacement_data(extra, y0, y1, c2)
-                    replace_table_rows(
-                        "displacement_data",
-                        ck2,
-                        r2,
-                        [
-                            "country",
-                            "year",
-                            "metric",
-                            "value",
-                            "coa",
-                            "coa_name",
-                            "endpoint_url",
-                            "fetched_at",
-                        ],
-                    )
-            extra_disp.extend(
-                run_sql_query(f"SELECT * FROM displacement_data WHERE cache_key = '{ck2}'")
-            )
-
     if world_rows:
         citations.append(
             Citation(
@@ -603,50 +513,9 @@ async def collect_migration_dataset(
                 fetched_at=str(world_rows[0].get("fetched_at", "")),
             )
         )
-    if disp_rows:
-        citations.append(
-            Citation(
-                claim="UNHCR displacement rows",
-                value=str(len(disp_rows)),
-                source_api="UNHCR API",
-                indicator_code="population/v1",
-                endpoint_url=str(disp_rows[0].get("endpoint_url", "")),
-                fetched_at=str(disp_rows[0].get("fetched_at", "")),
-            )
-        )
 
     destinations: list[dict] = []
-    if disp_rows:
-        df_co: dict[str, float] = {}
-        for r in disp_rows:
-            dest = str(r.get("coa_name") or r.get("coa") or "unknown")
-            df_co[dest] = df_co.get(dest, 0.0) + float(r.get("value") or 0)
-        for k, v in sorted(df_co.items(), key=lambda x: -x[1])[:15]:
-            destinations.append({"destination_country": k, "refugee_count": v})
-
-    # Fetch top headline for the top suggested destination (if any)
     top_headline: str | None = None
-    if destinations:
-        suggested = destinations[0]["destination_country"]
-        try:
-            top_news_rows, _ = await news_tools.get_country_news(suggested, None, None)
-            if top_news_rows:
-                top_headline = top_news_rows[0].get("title") or None
-            tool_calls.append(
-                ToolCall(
-                    tool_name="news.get_country_news",
-                    params={"query": suggested},
-                    from_cache=False,
-                    started_at=datetime.now(timezone.utc).isoformat(),
-                    finished_at=datetime.now(timezone.utc).isoformat(),
-                    rows_returned=(len(top_news_rows) if top_news_rows else 0),
-                    endpoint_url=(top_news_rows[0].get("endpoint_url") if top_news_rows else None),
-                    source_api="NewsAPI",
-                )
-            )
-        except Exception:
-            # don't fail the whole collection for headline fetch
-            pass
 
     if intent.intent == "relocation_advisory":
         refs = ["NZL", "FIN", "NOR", "SWE", "CAN", "DEU", "NLD", "CHE", "DNK", "IRL", "AUS", "SGP"]
@@ -715,8 +584,6 @@ async def collect_migration_dataset(
     missing_reasons: list[str] = []
     if not world_rows:
         missing_reasons.append("no_economic_indicators")
-    if not disp_rows:
-        missing_reasons.append("no_displacement_data")
     if not news_rows:
         missing_reasons.append("no_news_headlines")
     if not climate_rows:
@@ -734,7 +601,7 @@ async def collect_migration_dataset(
         year_from=y0,
         year_to=y1,
         intent=intent.intent,
-        displacement=disp_rows + extra_disp,
+        displacement=[],
         destinations=destinations,
         worldbank=world_rows,
         conflict_events=conflict_rows,
@@ -753,7 +620,6 @@ async def collect_migration_dataset(
     
     # Debug output
     print(f"\n[SCOUT] Data Collection Complete for {name} ({code}):")
-    print(f"  Displacement: {len(disp_rows + extra_disp)} rows")
     print(f"  World Bank: {len(world_rows)} rows")
     print(f"  Conflict Events: {len(conflict_rows)} rows")
     print(f"  Climate: {len(climate_rows)} rows")
@@ -761,7 +627,6 @@ async def collect_migration_dataset(
     print(f"  News: {len(news_rows)} rows")
     print(f"  Employment: {len(emp_rows)} rows")
     print(f"  City Scores: {len(city_rows)} rows")
-    print(f"  Destinations: {len(destinations)} (from {len(disp_rows)} UNHCR rows)")
     print(f"  Tool calls logged: {len(tool_calls)}")
     print(f"  Missing data: {missing_reasons or 'none'}")
     print()

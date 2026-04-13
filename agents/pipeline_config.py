@@ -13,7 +13,6 @@ from __future__ import annotations
 AVAILABLE_TOOLS: dict[str, str] = {
     "worldbank":   "GDP growth, inflation, health & education spending, poverty, political stability",
     "employment":  "Unemployment rates, youth unemployment, labour force participation (ILO + World Bank)",
-    "unhcr":       "Refugee displacement outflows and destination countries",
     "environment": "Climate trends (temperature, precipitation) + air quality PM2.5 — combined",
     "acled":       "Armed conflict events and fatalities",
     "news":        "Recent news events summarised around the query topic",
@@ -27,7 +26,6 @@ AVAILABLE_TOOLS: dict[str, str] = {
 TOOL_DATA_KEYS: dict[str, list[str]] = {
     "worldbank":   ["worldbank"],
     "employment":  ["employment"],
-    "unhcr":       ["displacement"],
     "environment": ["climate", "aqi"],
     "acled":       ["conflict_events"],
     "news":        ["news"],

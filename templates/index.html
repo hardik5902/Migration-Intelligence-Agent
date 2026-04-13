@@ -170,14 +170,14 @@
         <!-- EDA findings + EDA charts (populated on "eda" SSE event) -->
         <section id="eda-panel" class="eda-section hidden">
           <div class="section-heading">
-            <p class="eyebrow">Exploratory Data Analysis</p>
-            <h2>Statistical patterns surfaced before charting</h2>
+            <p class="eyebrow">Data Patterns</p>
+            <h2>What the numbers reveal</h2>
           </div>
           <!-- EDA finding cards (growth / anomaly / correlation / volatility) -->
           <div class="eda-findings-grid" id="eda-findings-grid"></div>
           <!-- EDA-specific charts: heatmap / CAGR bar / anomaly timeline / stats spread -->
           <div id="eda-charts-wrap" class="eda-charts-wrap hidden">
-            <p class="eyebrow" style="margin-top:1.5rem">EDA Visualisations</p>
+            <p class="eyebrow" style="margin-top:1.5rem">Statistical Charts</p>
             <div class="charts-grid" id="eda-charts-grid"></div>
           </div>
         </section>
@@ -307,10 +307,10 @@
 
       // ── EDA type → icon + colour class ────────────────────────────────────────
       const EDA_META = {
-        growth:      { icon: '📈', cls: 'eda-growth'      },
-        anomaly:     { icon: '⚠️',  cls: 'eda-anomaly'     },
-        correlation: { icon: '🔗', cls: 'eda-correlation'  },
-        volatility:  { icon: '📊', cls: 'eda-volatility'   },
+        growth:      { tag: 'Growth',      cls: 'eda-growth'      },
+        anomaly:     { tag: 'Outlier',     cls: 'eda-anomaly'     },
+        correlation: { tag: 'Correlation', cls: 'eda-correlation'  },
+        volatility:  { tag: 'Volatility',  cls: 'eda-volatility'   },
       };
 
       function onEda(d) {
@@ -322,12 +322,12 @@
         grid.innerHTML = '';
         if (findings.length) {
           findings.forEach(f => {
-            const meta = EDA_META[f.type] || { icon: '🔎', cls: 'eda-default' };
+            const meta = EDA_META[f.type] || { tag: 'Finding', cls: 'eda-default' };
             const card = document.createElement('article');
             card.className = `eda-finding-card ${meta.cls}`;
             card.innerHTML = `
-              <div class="eda-card-icon">${meta.icon}</div>
               <div class="eda-card-body">
+                <span class="eda-card-tag">${meta.tag}</span>
                 <h3>${f.title || ''}</h3>
                 <p class="eda-card-value">${f.value || ''}</p>
                 <p class="eda-card-detail">${f.detail || ''}</p>
@@ -354,6 +354,7 @@
               { responsive: true, displayModeBar: false, displaylogo: false });
           });
           show($('eda-charts-wrap'));
+          requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
         }
       }
 
@@ -373,6 +374,7 @@
         });
         if (d.charts && d.charts.length) {
           show($('charts-panel'));
+          requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
         }
       }
 

@@ -129,13 +129,18 @@ async def fetch_macro_bundle(
     year_to: int,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """GDP growth, inflation (CPI), stability, unemployment, Gini — all fetched in parallel."""
+    """Full World Bank bundle: economic, labour, health, education, poverty — all in parallel."""
     indicators = {
         "NY.GDP.MKTP.KD.ZG": "gdp_growth",
         "FP.CPI.TOTL.ZG": "inflation",
         "PV.EST": "political_stability",
         "SL.UEM.TOTL.ZS": "unemployment",
         "SI.POV.GINI": "gini",
+        "NY.GDP.PCAP.CD": "gdp_per_capita_usd",
+        "SH.XPD.CHEX.GD.ZS": "health_expenditure_gdp",
+        "SH.MED.PHYS.ZS": "physicians_per_1000",
+        "SE.XPD.TOTL.GD.ZS": "education_spend_gdp",
+        "SI.POV.NAHC": "poverty_headcount",
     }
     own = client is None
     c = client or httpx.AsyncClient(timeout=20.0)

@@ -734,52 +734,70 @@ body {
 
 .eda-finding-card {
   display: flex;
-  gap: 16px;
-  align-items: flex-start;
-  padding: 20px 22px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 22px 18px;
   border-radius: var(--radius-md);
-  transition: box-shadow 0.2s ease;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .eda-finding-card:hover {
-  box-shadow: 0 8px 28px rgba(84, 45, 28, 0.14);
+  box-shadow: 0 6px 22px rgba(84, 45, 28, 0.11);
 }
 
-/* Left-border accent per finding type */
-.eda-growth      { border-left: 4px solid #2d6a4f; }
-.eda-anomaly     { border-left: 4px solid #af3f2f; }
-.eda-correlation { border-left: 4px solid #6a78f0; }
-.eda-volatility  { border-left: 4px solid #c45c26; }
-.eda-default     { border-left: 4px solid var(--teal); }
+/* Top-border accent per finding type */
+.eda-growth      { border-top: 3px solid #2d6a4f; }
+.eda-anomaly     { border-top: 3px solid #af3f2f; }
+.eda-correlation { border-top: 3px solid #6a78f0; }
+.eda-volatility  { border-top: 3px solid #c45c26; }
+.eda-default     { border-top: 3px solid var(--teal); }
 
 .eda-card-icon {
-  font-size: 1.6rem;
-  line-height: 1;
-  flex-shrink: 0;
-  margin-top: 2px;
+  display: none; /* replaced by CSS type tag */
 }
+
+.eda-card-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border-radius: 100px;
+  margin-bottom: 2px;
+}
+.eda-growth      .eda-card-tag { background: rgba(45,106,79,0.12); color: #2d6a4f; }
+.eda-anomaly     .eda-card-tag { background: rgba(175,63,47,0.1);  color: #af3f2f; }
+.eda-correlation .eda-card-tag { background: rgba(106,120,240,0.12); color: #4c56b8; }
+.eda-volatility  .eda-card-tag { background: rgba(196,92,38,0.1);  color: #c45c26; }
+.eda-default     .eda-card-tag { background: rgba(84,112,123,0.12); color: var(--teal); }
 
 .eda-card-body h3 {
   margin: 0 0 6px;
   font-size: 0.95rem;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.35;
   color: var(--text);
 }
 
 .eda-card-value {
-  margin: 0 0 8px;
-  font-size: 1.05rem;
+  margin: 0 0 10px;
+  font-size: 1.25rem;
   font-weight: 700;
   font-family: "Source Serif 4", serif;
   color: var(--brand);
+  line-height: 1.2;
 }
 
 .eda-card-detail {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.6;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
 }
 
 .eda-charts-wrap {

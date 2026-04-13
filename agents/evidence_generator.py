@@ -90,11 +90,13 @@ def _build_data_summary(
                     ("gdp_growth",            "GDP growth (%)"),
                     ("gdp_per_capita_usd",    "GDP per capita (USD)"),
                     ("inflation",             "Inflation (%)"),
-                    ("health_expenditure_gdp","Health expenditure (% GDP)"),
-                    ("education_spend_gdp",   "Education spending (% GDP)"),
-                    ("poverty_headcount",     "Poverty headcount (%)"),
                     ("political_stability",   "Political stability index"),
                     ("gini",                  "Gini index"),
+                    ("unemployment",          "Unemployment (%)"),
+                    ("health_expenditure_gdp","Health expenditure (% GDP)"),
+                    ("physicians_per_1000",   "Physicians per 1,000 people"),
+                    ("education_spend_gdp",   "Education spending (% GDP)"),
+                    ("poverty_headcount",     "Poverty headcount (%)"),
                 ]:
                     sub = wb[wb["label"] == label].dropna(subset=["value", "year"])
                     if not sub.empty:
@@ -121,12 +123,6 @@ def _build_data_summary(
                             f"  Youth unemployment: {float(yrow['youth_unemployment_rate']):.1f}%"
                             f" ({int(yrow.get('year', 0))})"
                         )
-
-        if "unhcr" in selected_tools:
-            disp = pd.DataFrame(dataset.get("displacement") or [])
-            if not disp.empty and "value" in disp.columns:
-                total = disp["value"].sum()
-                lines.append(f"  Total displacement outflow: {total:,.0f} persons")
 
         if "acled" in selected_tools:
             conf = pd.DataFrame(dataset.get("conflict_events") or [])

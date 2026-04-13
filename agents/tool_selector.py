@@ -28,19 +28,17 @@ Given a user query, decide:
 Available tools:
 - worldbank   : GDP growth, inflation, health spending, education spending, poverty, political stability
 - employment  : Unemployment rates, youth unemployment, labour force participation
-- unhcr       : Refugee displacement outflows and top destination countries
 - environment : Climate trends (temperature anomaly, precipitation) + PM2.5 air quality — use for health/environment queries
 - acled       : Armed conflict events and fatalities — use for safety/conflict queries
 - news        : Recent news summary focused on the query topic — use when current events matter
 
 Selection rules:
 - ALWAYS include worldbank — it provides the economic foundation for every query.
-- For migration push-factor queries: worldbank + unhcr.
 - For safety/conflict queries: worldbank + acled.
 - For environment/health/climate queries: worldbank + environment.
 - For economic/labour queries: worldbank + employment.
 - For current-events queries: worldbank + news.
-- General relocation queries: worldbank + employment + unhcr.
+- General relocation queries: worldbank + employment + acled.
 - Add a 3rd or 4th tool only when the query clearly calls for it.
 - Identify K distinct countries that best answer the query.
   - If specific countries are named, include them.
@@ -50,13 +48,13 @@ Selection rules:
 
 Return valid JSON with EXACTLY these fields (no extra keys):
 {
-  "selected_tools": ["worldbank", "employment", "unhcr"],
+  "selected_tools": ["worldbank", "employment"],
   "countries": ["Germany", "Canada", "Australia", "Netherlands", "Sweden"],
   "country_codes": ["DEU", "CAN", "AUS", "NLD", "SWE"],
   "k": 5,
   "query_focus": "Compare economic stability and employment for migration decisions",
-  "year_from": 2015,
-  "year_to": 2023,
+  "year_from": 2020,
+  "year_to": 2025,
   "reasoning": "worldbank always included; added employment for labour data and unhcr for displacement flows"
 }"""
 

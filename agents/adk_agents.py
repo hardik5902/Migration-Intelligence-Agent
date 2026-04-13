@@ -166,7 +166,6 @@ class EDAAnalystADKAgent(BaseAgent):
             run_eda,
             countries_data,
             selector.selected_tools,
-            selector.query_focus,
         )
 
         # Build up to 2 EDA-specific charts (heatmap / CAGR bar / anomaly / spread)
