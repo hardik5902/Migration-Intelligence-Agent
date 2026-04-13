@@ -83,7 +83,13 @@ async def collect_migration_dataset(
                     )
                 if rows:
                     fresh["World Bank"] = str(rows[0].get("fetched_at", ""))
-                return rows, urls
+                # determine a sensible endpoint_url for diagnostics
+                endpoint_url = None
+                if rows:
+                    endpoint_url = rows[0].get("endpoint_url")
+                elif urls:
+                    endpoint_url = urls[0]
+                return rows, urls, endpoint_url, err_str
             finally:
                 finished = datetime.now(timezone.utc).isoformat()
                 tool_calls.append(
@@ -94,7 +100,7 @@ async def collect_migration_dataset(
                         started_at=started,
                         finished_at=finished,
                         rows_returned=(len(rows) if 'rows' in locals() and rows else 0),
-                        endpoint_url=(rows[0].get('endpoint_url') if 'rows' in locals() and rows else None),
+                        endpoint_url=locals().get('endpoint_url', None),
                         source_api="World Bank API",
                         error=locals().get('err_str', None) or None,
                     )
@@ -107,7 +113,22 @@ async def collect_migration_dataset(
                     rows = run_sql_query(f"SELECT * FROM displacement_data WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _url = await unhcr_tools.get_displacement_data(code, y0, y1, client)
+                    res = await unhcr_tools.get_displacement_data(code, y0, y1, client)
+                    # support tools that return (rows, endpoint_url) or (rows, endpoint_url, error)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     from_cache = False
                     replace_table_rows(
                         "displacement_data",
@@ -149,7 +170,21 @@ async def collect_migration_dataset(
                     rows = run_sql_query(f"SELECT * FROM city_scores WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _ = await teleport_tools.get_city_scores(name, country_iso3=code, client=client)
+                    res = await teleport_tools.get_city_scores(name, country_iso3=code, client=client)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     from_cache = False
                     replace_table_rows(
                         "city_scores",
@@ -182,7 +217,21 @@ async def collect_migration_dataset(
                     rows = run_sql_query(f"SELECT * FROM news_articles WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _ = await news_tools.get_country_news(name, None, client)
+                    res = await news_tools.get_country_news(name, None, client)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     from_cache = False
                     replace_table_rows(
                         "news_articles",
@@ -215,7 +264,21 @@ async def collect_migration_dataset(
                     rows = run_sql_query(f"SELECT * FROM climate_data WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _ = await climate_tools.get_climate_data(code, y0, y1, client)
+                    res = await climate_tools.get_climate_data(code, y0, y1, client)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     from_cache = False
                     replace_table_rows(
                         "climate_data",
@@ -257,7 +320,21 @@ async def collect_migration_dataset(
                     rows = run_sql_query(f"SELECT * FROM employment_data WHERE cache_key = '{ck}'")
                     from_cache = True
                 else:
-                    rows, _ = await employment_tools.get_employment_data(code, y0, y1, client)
+                    res = await employment_tools.get_employment_data(code, y0, y1, client)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     from_cache = False
                     replace_table_rows(
                         "employment_data",
@@ -334,7 +411,22 @@ async def collect_migration_dataset(
                     from_cache = True
                 else:
                     iso2 = iso3_to_iso2(code) or code[:2]
-                    rows, _ = await aqi_tools.get_aqi_by_country(code, country_iso2=iso2, top_n=40, client=client)
+                    # aqi_tools.get_aqi_by_country accepts (country_iso3, top_n, client)
+                    res = await aqi_tools.get_aqi_by_country(code, top_n=40, client=client)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     for r in rows:
                         r["country"] = r.get("country") or iso2
                     from_cache = False
@@ -519,7 +611,21 @@ async def collect_migration_dataset(
                 if should_use_cache("aqi_data", ckx):
                     more.extend(run_sql_query(f"SELECT * FROM aqi_data WHERE cache_key = '{ckx}'"))
                 else:
-                    rows, _ = await aqi_tools.get_aqi_by_country(candidate, country_iso2=iso2, top_n=25, client=c3)
+                    res = await aqi_tools.get_aqi_by_country(candidate, top_n=25, client=c3)
+                    if isinstance(res, tuple):
+                        if len(res) == 3:
+                            rows, endpoint_url, error = res
+                        elif len(res) == 2:
+                            rows, endpoint_url = res
+                            error = None
+                        else:
+                            rows = res
+                            endpoint_url = None
+                            error = None
+                    else:
+                        rows = res
+                        endpoint_url = None
+                        error = None
                     for r in rows:
                         r["country"] = r.get("country") or candidate
                     replace_table_rows(

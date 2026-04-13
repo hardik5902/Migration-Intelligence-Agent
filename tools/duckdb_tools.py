@@ -223,7 +223,16 @@ def replace_table_rows(
     """Delete prior rows for cache_key and insert fresh rows."""
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Unknown table: {table}")
+    # If rows is empty, still update cache_meta so callers know we attempted
+    # a fetch and avoid repeated refetchs inside the TTL window. Do not insert
+    # data rows in this case.
     if not rows:
+        con = _connect()
+        try:
+            con.execute(f"DELETE FROM {table} WHERE cache_key = ?", [key])
+            _touch_meta(con, table, key)
+        finally:
+            con.close()
         return
     con = _connect()
     try:
