@@ -30,10 +30,9 @@ from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from typing_extensions import override
 
-from agents.chart_selector import select_charts_with_llm
+from agents.analysis_agent import build_data_coverage_report, run_unified_analysis
 from agents.data_collector import collect_data_for_countries, filter_countries_by_coverage
 from agents.eda_analyst import run_eda
-from agents.evidence_generator import generate_hypotheses
 from agents.pipeline_config import TOOL_DATA_KEYS
 from agents.tool_selector import analyze_query_with_llm
 from analysis.country_charts import (
@@ -41,8 +40,12 @@ from analysis.country_charts import (
     build_registry_manifest,
     render_charts_by_keys,
 )
-from analysis.eda_charts import build_eda_charts
-from models.schemas import HypothesisInsight, ToolSelectorOutput
+from analysis.eda_charts import (
+    build_eda_chart_manifest,
+    build_eda_charts,
+    render_eda_charts_by_keys,
+)
+from models.schemas import ToolSelectorOutput
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +207,11 @@ class DataCollectorADKAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 
 class EDAAnalystADKAgent(BaseAgent):
-    """Runs statistical EDA (growth rates, anomalies, correlations) on collected data."""
+    """Runs statistical EDA, builds data-coverage report + comparison/EDA chart manifests.
+
+    This agent is pure Python — no LLM calls. It prepares everything the
+    unified analysis agent needs in a single LLM request.
+    """
 
     @override
     async def _run_async_impl(
@@ -221,10 +228,10 @@ class EDAAnalystADKAgent(BaseAgent):
         _emit("stage", {
             "step": 3, "total": 5,
             "label": "Exploratory data analysis",
-            "message": "Running growth-rate, anomaly, and correlation analysis…",
+            "message": "Running stats, decoding data coverage, building chart manifests…",
         })
 
-        # run_eda calls run_growth_rate, run_anomaly_detect, run_correlation_analysis
+        # Pure-Python stats (CAGR / anomaly / correlation / summary)
         eda_findings = await asyncio.to_thread(
             run_eda,
             countries_data,
@@ -233,24 +240,26 @@ class EDAAnalystADKAgent(BaseAgent):
             selector.worldbank_indicators,
         )
 
-        # Build up to 2 EDA-specific charts (heatmap / CAGR bar / anomaly / spread)
-        eda_chart_jsons: list[str] = await asyncio.to_thread(
-            build_eda_charts,
-            eda_findings,
+        # Data-coverage introspection: decode what columns came back per country
+        data_coverage = await asyncio.to_thread(
+            build_data_coverage_report,
             countries_data,
+            selector.selected_tools,
         )
 
-        from plotly.io import from_json as _plotly_from_json
-        eda_charts_normalized: list[Any] = []
-        for j in eda_chart_jsons:
-            try:
-                eda_charts_normalized.append(_plotly_from_json(j).to_plotly_json())
-            except Exception:
-                pass
+        # Comparison chart manifest (from country_charts registry)
+        comparison_manifest = await asyncio.to_thread(
+            build_registry_manifest, countries_data
+        )
+
+        # EDA chart manifest (which stat charts can actually render)
+        eda_chart_manifest = await asyncio.to_thread(
+            build_eda_chart_manifest, eda_findings, countries_data
+        )
 
         _emit("eda", {
-            "findings":   eda_findings.get("findings", []),
-            "eda_charts": eda_charts_normalized,
+            "findings":     eda_findings.get("findings", []),
+            "eda_charts":   [],  # charts come later via the 'eda_charts' event
             "correlations": eda_findings.get("correlations", []),
         })
 
@@ -260,19 +269,21 @@ class EDAAnalystADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "eda_findings":   eda_findings,
-                    "eda_charts":     eda_charts_normalized,
+                    "eda_findings":        eda_findings,
+                    "data_coverage":       data_coverage,
+                    "comparison_manifest": comparison_manifest,
+                    "eda_chart_manifest":  eda_chart_manifest,
                 }
             ),
         )
 
 
 # ---------------------------------------------------------------------------
-# Agent 4 — Chart building + evidence generation (runs both concurrently)
+# Agent 4 — Unified analysis: single LLM call returns everything
 # ---------------------------------------------------------------------------
 
-class ChartEvidenceADKAgent(BaseAgent):
-    """Builds 4 Plotly charts and 3 hypothesis insights concurrently; emits both."""
+class UnifiedAnalysisADKAgent(BaseAgent):
+    """Single LLM call: picks comparison charts, EDA charts, and writes hypotheses."""
 
     @override
     async def _run_async_impl(
@@ -286,67 +297,88 @@ class ChartEvidenceADKAgent(BaseAgent):
         selector = ToolSelectorOutput.model_validate(
             ctx.session.state.get("selector_output", {})
         )
-        countries_data: dict[str, Any] = ctx.session.state.get("countries_data", {})
-        eda_findings: dict[str, Any] = ctx.session.state.get("eda_findings", {})
+        countries_data:      dict[str, Any]  = ctx.session.state.get("countries_data", {})
+        eda_findings:        dict[str, Any]  = ctx.session.state.get("eda_findings", {})
+        data_coverage:       dict[str, Any]  = ctx.session.state.get("data_coverage", {})
+        comparison_manifest: list[dict]      = ctx.session.state.get("comparison_manifest", [])
+        eda_chart_manifest:  list[dict]      = ctx.session.state.get("eda_chart_manifest", [])
         query = pipeline_query.get() or ctx.session.state.get("user_query", "")
 
         _emit("stage", {
             "step": 4, "total": 5,
             "label": "Building charts & insights",
-            "message": (
-                "Generating 4 comparison charts and "
-                "3 evidence insights in parallel…"
-            ),
+            "message": "Single LLM call: picking charts + writing hypotheses…",
         })
 
-        # Build the chart manifest once (sync, cheap — no LLM, no HTTP)
-        manifest = await asyncio.to_thread(build_registry_manifest, countries_data)
-
-        # Run LLM chart selection and hypothesis generation concurrently.
-        # select_charts_with_llm uses Gemini to pick the 4 most relevant chart
-        # keys given the query and the data manifest.  generate_hypotheses is
-        # the existing evidence LLM call.  Both are async so asyncio.gather
-        # runs them in parallel with no extra latency cost.
-        selected_keys, hypotheses = await asyncio.gather(
-            select_charts_with_llm(
-                query,
-                manifest,
-                selector.selected_tools,
-                selector.query_focus,
-            ),
-            generate_hypotheses(
-                query, countries_data, selector.selected_tools,
-                eda_findings, selector.query_focus,
-            ),
+        # --- One LLM call: chart keys (comparison + EDA) + hypotheses ---
+        result = await run_unified_analysis(
+            query=query,
+            query_focus=selector.query_focus,
+            selected_tools=selector.selected_tools,
+            countries=selector.countries,
+            comparison_manifest=comparison_manifest,
+            eda_chart_manifest=eda_chart_manifest,
+            eda_findings=eda_findings,
+            data_coverage=data_coverage,
         )
 
-        # Fallback: if the LLM returned fewer than 4 valid keys, fill the rest
-        # using the heuristic scorer so we always produce 4 charts.
-        if len(selected_keys) < 4:
-            chart_jsons = await asyncio.to_thread(
+        comparison_keys = result["comparison_chart_keys"]
+        eda_keys        = result["eda_chart_keys"]
+        hypotheses      = result["hypotheses"]
+
+        # --- Render comparison charts (4) ---
+        if len(comparison_keys) >= 4:
+            comp_chart_jsons = await asyncio.to_thread(
+                render_charts_by_keys,
+                comparison_keys,
+                comparison_manifest,
+                countries_data,
+            )
+        else:
+            # Fallback to heuristic builder if LLM returned < 4 valid keys
+            comp_chart_jsons = await asyncio.to_thread(
                 build_country_comparison_charts,
                 countries_data,
                 selector.selected_tools,
                 selector.query_focus,
                 selector.worldbank_indicators,
             )
-        else:
-            chart_jsons = await asyncio.to_thread(
-                render_charts_by_keys,
-                selected_keys,
-                manifest,
+
+        # --- Render EDA charts (up to 4) ---
+        if eda_keys:
+            eda_chart_jsons = await asyncio.to_thread(
+                render_eda_charts_by_keys,
+                eda_keys,
+                eda_findings,
                 countries_data,
             )
+        else:
+            # Fallback: heuristic picks up to 4 from the manifest
+            eda_chart_jsons = await asyncio.to_thread(
+                build_eda_charts,
+                eda_findings,
+                countries_data,
+                4,
+            )
 
-        # Normalise Plotly JSON strings → dicts for the browser JS client
-        charts_normalized: list[Any] = []
-        for j in chart_jsons:
-            try:
-                charts_normalized.append(_plotly_from_json(j).to_plotly_json())
-            except Exception:
-                pass
+        # Normalise Plotly JSON → dict for the browser
+        def _jsons_to_dicts(chart_jsons: list[str]) -> list[Any]:
+            result: list[Any] = []
+            for j in chart_jsons:
+                try:
+                    result.append(_plotly_from_json(j).to_plotly_json())
+                except Exception:
+                    pass
+            return result
 
-        _emit("charts", {"charts": charts_normalized})
+        comp_charts_normalized = _jsons_to_dicts(comp_chart_jsons)
+        eda_charts_normalized  = _jsons_to_dicts(eda_chart_jsons)
+
+        # Emit EDA charts (findings were emitted earlier by EDAAnalystADKAgent)
+        if eda_charts_normalized:
+            _emit("eda_charts", {"eda_charts": eda_charts_normalized})
+
+        _emit("charts", {"charts": comp_charts_normalized})
 
         # Per-tool row counts for the status badges
         tool_stats: dict[str, int] = {
@@ -380,7 +412,8 @@ class ChartEvidenceADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "charts":      charts_normalized,
+                    "charts":      comp_charts_normalized,
+                    "eda_charts":  eda_charts_normalized,
                     "hypotheses":  [h.model_dump() for h in hypotheses],
                     "tool_stats":  tool_stats,
                 }

@@ -417,90 +417,196 @@ def _build_stats_spread(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Manifest + dispatcher (LLM-driven EDA chart selection)
 # ---------------------------------------------------------------------------
 
-def build_eda_charts(
+_EDA_CHART_META = {
+    "correlation_heatmap": {
+        "title": "Indicator correlation matrix — latest values across countries",
+        "type":  "heatmap",
+        "desc":  "Pearson correlation between every pair of available indicators.",
+    },
+    "growth_rate_bar": {
+        "title": "CAGR comparison across countries",
+        "type":  "bar",
+        "desc":  "Compound annual growth rate for a single metric, sorted by value.",
+    },
+    "anomaly_timeline": {
+        "title": "Anomaly-annotated time series (|z| > 2σ)",
+        "type":  "line",
+        "desc":  "Trend line with star markers on statistically anomalous years.",
+    },
+    "distribution_box": {
+        "title": "Mean ± 1σ distribution summary",
+        "type":  "bar",
+        "desc":  "Error bars show statistical spread for a single metric per country.",
+    },
+}
+
+
+def _metric_label(metric: str) -> str:
+    return metric.replace("_", " ").title()
+
+
+def _build_dispatcher(eda_findings: dict, countries_data: dict):
+    growth_rates  = eda_findings.get("growth_rates", {})
+    anomalies     = eda_findings.get("anomalies", {})
+    stats_summary = eda_findings.get("stats_summary", {})
+    latest_matrix = eda_findings.get("latest_matrix", {})
+
+    def render(key: str) -> go.Figure | None:
+        if key == "correlation_heatmap":
+            return _build_correlation_heatmap(latest_matrix)
+        if ":" not in key:
+            return None
+        base, metric = key.split(":", 1)
+        if base == "growth_rate_bar":
+            return _build_cagr_bar(growth_rates, metric)
+        if base == "anomaly_timeline":
+            return _build_anomaly_timeline(countries_data, anomalies, metric)
+        if base == "distribution_box":
+            return _build_stats_spread(stats_summary, metric)
+        return None
+
+    return render
+
+
+def build_eda_chart_manifest(
     eda_findings: dict[str, Any],
     countries_data: dict[str, Any],
-) -> list[str]:
-    """
-    Build up to 2 EDA-specific charts driven by eda_findings["charts_hint"].
+) -> list[dict[str, Any]]:
+    """Enumerate every EDA chart that can actually be built from the data.
 
-    Metric selection is driven by "active_metrics_ordered" — the query-priority
-    list written by run_eda() — so charts always show what the user asked about,
-    not a hardcoded fallback to GDP or conflict metrics.
-
-    Returns a list of Plotly JSON strings.
+    Returns a JSON-safe list of entries the unified analysis LLM can choose from:
+      { key, title, type, description, metric, applicable_countries }
     """
     growth_rates           = eda_findings.get("growth_rates", {})
     anomalies              = eda_findings.get("anomalies", {})
     stats_summary          = eda_findings.get("stats_summary", {})
     latest_matrix          = eda_findings.get("latest_matrix", {})
-    charts_hint            = eda_findings.get("charts_hint", [])
     active_metrics_ordered = eda_findings.get("active_metrics_ordered", [])
 
-    # ── Query-aware metric pickers ──────────────────────────────────────────────
+    entries: list[dict[str, Any]] = []
 
-    def _best_cagr_metric() -> str:
-        """First metric in query-priority order that has CAGR data."""
-        for m in active_metrics_ordered:
-            if any(growth_rates.get(c, {}).get(m, {}).get("cagr") is not None for c in growth_rates):
-                return m
-        return "gdp_per_capita"
+    # Correlation heatmap: needs ≥3 countries × ≥2 numeric metrics
+    if latest_matrix:
+        df = pd.DataFrame(latest_matrix)
+        numeric = df.select_dtypes(include=[float, int]).dropna(axis=1, how="all")
+        if numeric.shape[0] >= 3 and numeric.shape[1] >= 2 and len(numeric.dropna()) >= 3:
+            entries.append({
+                "key":   "correlation_heatmap",
+                "title": _EDA_CHART_META["correlation_heatmap"]["title"],
+                "type":  _EDA_CHART_META["correlation_heatmap"]["type"],
+                "description": _EDA_CHART_META["correlation_heatmap"]["desc"],
+                "metric": None,
+                "applicable_countries": list(numeric.dropna().index),
+            })
 
-    def _best_spread_metric() -> str:
-        """First metric in query-priority order that has ≥2 countries with stats."""
-        for m in active_metrics_ordered:
-            if sum(1 for c in stats_summary if stats_summary[c].get(m, {}).get("n", 0) >= 2) >= 2:
-                return m
-        return "gdp_growth"
+    # Per-metric entries in query-priority order
+    for metric in active_metrics_ordered:
+        label = _metric_label(metric)
 
-    def _best_anomaly_metric() -> str:
-        """First metric in query-priority order that has detected anomalies."""
-        for m in active_metrics_ordered:
-            if any(any(a["metric"] == m for a in lst) for lst in anomalies.values() if lst):
-                return m
-        # Fall back to any metric with an anomaly
-        for lst in anomalies.values():
-            if lst:
-                return lst[0]["metric"]
-        return active_metrics_ordered[0] if active_metrics_ordered else "gdp_growth"
+        # distribution_box: ≥2 countries with n ≥ 2
+        countries_with_spread = [
+            c for c in stats_summary
+            if stats_summary.get(c, {}).get(metric, {}).get("n", 0) >= 2
+        ]
+        if len(countries_with_spread) >= 2:
+            entries.append({
+                "key":   f"distribution_box:{metric}",
+                "title": f"Distribution summary — {label} (mean ± 1σ)",
+                "type":  "bar",
+                "description": _EDA_CHART_META["distribution_box"]["desc"],
+                "metric": metric,
+                "applicable_countries": countries_with_spread,
+            })
 
-    # ── Chart dispatcher ────────────────────────────────────────────────────────
+        # growth_rate_bar: ≥2 countries with CAGR value
+        countries_with_cagr = [
+            c for c in growth_rates
+            if growth_rates.get(c, {}).get(metric, {}).get("cagr") is not None
+        ]
+        if len(countries_with_cagr) >= 2:
+            entries.append({
+                "key":   f"growth_rate_bar:{metric}",
+                "title": f"CAGR comparison — {label}",
+                "type":  "bar",
+                "description": _EDA_CHART_META["growth_rate_bar"]["desc"],
+                "metric": metric,
+                "applicable_countries": countries_with_cagr,
+            })
 
-    charts: list[go.Figure] = []
-    attempted: set[str] = set()
+        # anomaly_timeline: at least one country with an anomaly for this metric
+        countries_with_anom = [
+            c for c, lst in anomalies.items()
+            if any(a.get("metric") == metric for a in (lst or []))
+        ]
+        if countries_with_anom:
+            entries.append({
+                "key":   f"anomaly_timeline:{metric}",
+                "title": f"Anomaly timeline — {label}",
+                "type":  "line",
+                "description": _EDA_CHART_META["anomaly_timeline"]["desc"],
+                "metric": metric,
+                "applicable_countries": countries_with_anom,
+            })
 
-    def _try(hint: str) -> go.Figure | None:
-        if hint == "correlation_heatmap":
-            return _build_correlation_heatmap(latest_matrix)
-        if hint == "growth_rate_bar":
-            return _build_cagr_bar(growth_rates, _best_cagr_metric())
-        if hint == "anomaly_timeline":
-            return _build_anomaly_timeline(countries_data, anomalies, _best_anomaly_metric())
-        if hint == "distribution_box":
-            return _build_stats_spread(stats_summary, _best_spread_metric())
-        return None
+    return entries
 
-    for hint in charts_hint:
-        if len(charts) >= 2:
-            break
-        if hint in attempted:
-            continue
-        attempted.add(hint)
-        fig = _try(hint)
+
+def render_eda_charts_by_keys(
+    keys: list[str],
+    eda_findings: dict[str, Any],
+    countries_data: dict[str, Any],
+) -> list[str]:
+    """Render exactly the EDA charts identified by `keys` (max 4).
+
+    Keys that fail to render are silently skipped — the caller can pad or not.
+    Returns a list of Plotly JSON strings, length ≤ len(keys).
+    """
+    render = _build_dispatcher(eda_findings, countries_data)
+    out: list[str] = []
+    for key in keys[:4]:
+        try:
+            fig = render(key)
+        except Exception as exc:
+            print(f"[EDA_CHARTS] render failed for {key}: {exc}")
+            fig = None
         if fig is not None:
-            charts.append(fig)
+            out.append(fig.to_json())
+    return out
 
-    # Fallback: prefer statistical charts over time-series
-    if not charts:
-        for fallback in ["distribution_box", "correlation_heatmap", "anomaly_timeline", "growth_rate_bar"]:
-            if fallback not in attempted:
-                fig = _try(fallback)
-                if fig is not None:
-                    charts.append(fig)
-                    if len(charts) >= 2:
-                        break
 
-    return [fig.to_json() for fig in charts]
+# ---------------------------------------------------------------------------
+# Public entry point (legacy fallback — heuristic, max 4 charts)
+# ---------------------------------------------------------------------------
+
+def build_eda_charts(
+    eda_findings: dict[str, Any],
+    countries_data: dict[str, Any],
+    max_charts: int = 4,
+) -> list[str]:
+    """
+    Heuristic fallback: build up to `max_charts` EDA charts from the manifest.
+
+    Used only when the unified analysis LLM cannot select EDA chart keys.
+    Prefers the first N entries of the manifest, which is already sorted in
+    query-priority order by `build_eda_chart_manifest`.
+    """
+    manifest = build_eda_chart_manifest(eda_findings, countries_data)
+    if not manifest:
+        return []
+
+    # Prefer variety across chart types — dedupe by base key
+    seen_bases: set[str] = set()
+    picked: list[str] = []
+    for entry in manifest:
+        base = entry["key"].split(":", 1)[0]
+        if base in seen_bases and len(picked) >= 2:
+            continue
+        picked.append(entry["key"])
+        seen_bases.add(base)
+        if len(picked) >= max_charts:
+            break
+
+    return render_eda_charts_by_keys(picked, eda_findings, countries_data)
