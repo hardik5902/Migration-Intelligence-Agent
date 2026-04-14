@@ -215,6 +215,7 @@ class ToolSelectorOutput(BaseModel):
     selected_tools: list[str] = Field(default_factory=list)
     countries: list[str] = Field(default_factory=list)
     country_codes: list[str] = Field(default_factory=list)
+    country_strategy: str = "mixed"
     k: int = 5
     query_focus: str = ""
     year_from: int = 2015

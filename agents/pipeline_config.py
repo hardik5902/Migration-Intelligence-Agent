@@ -55,3 +55,21 @@ TOOL_DATA_KEYS: dict[str, list[str]] = {
     "teleport":    ["city_scores"],
     "news":        ["news"],
 }
+
+
+HIGH_COVERAGE_DEFAULTS: list[str] = [
+    "DEU",
+    "CAN",
+    "AUS",
+    "NLD",
+    "SWE",
+]
+
+
+TOOL_DEFAULT_COUNTRY_POOLS: dict[str, list[str]] = {
+    "unhcr": ["DEU", "CAN", "USA", "SWE", "AUS"],
+    "acled": ["DEU", "CAN", "SWE", "NLD", "AUS"],
+    "environment": ["CAN", "NZL", "SWE", "FIN", "AUS"],
+    "employment": ["DEU", "CAN", "NLD", "SWE", "AUS"],
+    "news": ["DEU", "CAN", "USA", "GBR", "AUS"],
+}

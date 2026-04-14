@@ -58,6 +58,11 @@ _NAME_TO_ISO3: dict[str, str] = {
     "japan": "JPN",
     "south korea": "KOR",
     "korea": "KOR",
+    "netherlands": "NLD",
+    "switzerland": "CHE",
+    "denmark": "DNK",
+    "ireland": "IRL",
+    "singapore": "SGP",
     "antarctica": "ATA",
 }
 
@@ -123,3 +128,7 @@ def iso3_to_name(iso3: str) -> str | None:
         if value == code and len(name) > 3:
             return " ".join(part.capitalize() for part in name.split())
     return None
+
+
+def all_country_names() -> list[str]:
+    return sorted(_NAME_TO_ISO3.keys(), key=len, reverse=True)

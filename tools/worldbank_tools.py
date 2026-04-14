@@ -11,6 +11,11 @@ from tools.country_codes import iso3_to_iso2
 
 WB_BASE = "https://api.worldbank.org/v2/country"
 
+# Global semaphore — caps total concurrent World Bank API calls across all countries.
+# Without this, K countries × N indicators fires K×N simultaneous requests, which
+# triggers WB rate-limiting. 10 concurrent slots is safe and still fast.
+_WB_SEMAPHORE = asyncio.Semaphore(10)
+
 
 async def get_indicator(
     country_code: str,
@@ -130,50 +135,56 @@ async def fetch_macro_bundle(
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Full World Bank bundle — 25 indicators across economy, labour, health, governance,
-    gender, infrastructure, environment, and quality of life.  All fetched in parallel."""
+    gender, infrastructure, environment, and quality of life.
+
+    A module-level semaphore (_WB_SEMAPHORE) caps concurrent requests globally so that
+    fetching K countries in parallel never floods the WB API.
+    """
     indicators = {
         # ── Economy ────────────────────────────────────────────────────────────
-        "NY.GDP.MKTP.KD.ZG":    "gdp_growth",
-        "NY.GDP.PCAP.CD":       "gdp_per_capita_usd",
-        "NY.GNP.PCAP.PP.CD":    "gni_per_capita_ppp",      # purchasing-power-parity wealth
-        "FP.CPI.TOTL.ZG":       "inflation",
-        "SI.POV.GINI":          "gini",
-        "SI.POV.NAHC":          "poverty_headcount",
+        "NY.GDP.MKTP.KD.ZG":  "gdp_growth",
+        "NY.GDP.PCAP.CD":     "gdp_per_capita_usd",
+        "NY.GNP.PCAP.PP.CD":  "gni_per_capita_ppp",
+        "FP.CPI.TOTL.ZG":    "inflation",
+        "SI.POV.GINI":        "gini",
+        "SI.POV.NAHC":        "poverty_headcount",
         # ── Labour ─────────────────────────────────────────────────────────────
-        "SL.UEM.TOTL.ZS":       "unemployment",
-        "SL.TLF.CACT.FE.ZS":   "female_labor_participation",  # women's economic inclusion
+        "SL.UEM.TOTL.ZS":    "unemployment",
+        "SL.TLF.CACT.FE.ZS": "female_labor_participation",
         # ── Health ─────────────────────────────────────────────────────────────
-        "SH.XPD.CHEX.GD.ZS":   "health_expenditure_gdp",
-        "SH.MED.PHYS.ZS":       "physicians_per_1000",
-        "SP.DYN.LE00.IN":       "life_expectancy",
-        "SP.DYN.IMRT.IN":       "infant_mortality",
-        # ── Sanitation & Water (waste, sewage, water quality) ──────────────────
-        "SH.STA.SMSS.ZS":       "sanitation_access",        # basic sanitation services (%)
-        "SH.H2O.SMDW.ZS":       "clean_water_access",       # safely managed drinking water (%)
+        "SH.XPD.CHEX.GD.ZS": "health_expenditure_gdp",
+        "SH.MED.PHYS.ZS":    "physicians_per_1000",
+        "SP.DYN.LE00.IN":    "life_expectancy",
+        "SP.DYN.IMRT.IN":    "infant_mortality",
+        # ── Sanitation & Water ─────────────────────────────────────────────────
+        "SH.STA.SMSS.ZS":    "sanitation_access",
+        "SH.H2O.SMDW.ZS":   "clean_water_access",
         # ── Education ──────────────────────────────────────────────────────────
-        "SE.XPD.TOTL.GD.ZS":   "education_spend_gdp",
+        "SE.XPD.TOTL.GD.ZS": "education_spend_gdp",
         # ── Governance & Safety ────────────────────────────────────────────────
-        "PV.EST":               "political_stability",
-        "CC.EST":               "control_of_corruption",
-        "RL.EST":               "rule_of_law",
-        "VC.IHR.PSRC.P5":       "homicide_rate",            # intentional homicides per 100k
+        "PV.EST":            "political_stability",
+        "CC.EST":            "control_of_corruption",
+        "RL.EST":            "rule_of_law",
+        "VC.IHR.PSRC.P5":   "homicide_rate",
         # ── Gender ─────────────────────────────────────────────────────────────
-        "SG.GEN.PARL.ZS":       "women_in_parliament",
-        "SP.ADO.TFRT":          "adolescent_fertility_rate", # gender development proxy
+        "SG.GEN.PARL.ZS":   "women_in_parliament",
+        "SP.ADO.TFRT":       "adolescent_fertility_rate",
         # ── Infrastructure & Connectivity ──────────────────────────────────────
-        "EG.ELC.ACCS.ZS":       "electricity_access",
-        "IT.NET.USER.ZS":       "internet_users_pct",
-        "SP.URB.TOTL.IN.ZS":    "urban_population_pct",
+        "EG.ELC.ACCS.ZS":   "electricity_access",
+        "IT.NET.USER.ZS":    "internet_users_pct",
+        "SP.URB.TOTL.IN.ZS": "urban_population_pct",
         # ── Environment ────────────────────────────────────────────────────────
-        "EN.ATM.CO2E.PC":       "co2_per_capita",           # CO2 emissions (metric tons/person)
+        "EN.ATM.CO2E.PC":   "co2_per_capita",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=20.0)
+    c = client or httpx.AsyncClient(timeout=60.0)
+
+    async def _fetch(ind: str) -> tuple[list, str, str | None]:
+        async with _WB_SEMAPHORE:
+            return await get_indicator(country_code, ind, year_from, year_to, c)
+
     try:
-        tasks = [
-            get_indicator(country_code, ind, year_from, year_to, c)
-            for ind in indicators
-        ]
+        tasks = [_fetch(ind) for ind in indicators]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         all_rows: list[dict[str, Any]] = []
         urls: list[str] = []

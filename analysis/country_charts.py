@@ -6,6 +6,7 @@ data — no hardcoded label assumptions that break when the API returns differen
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -483,27 +484,92 @@ def _build_area_chart(
     return fig
 
 
-# ── Metric registry: ordered by desirability ──────────────────────────────────
+# ── Query-relevance scoring ────────────────────────────────────────────────────
+#
+# Each registry entry carries a `tags` list.  _topic_score() counts how many
+# distinct tags have a keyword match inside the query_focus string.  Candidates
+# are sorted by (score DESC, coverage DESC) before the variety-pick passes, so
+# the 4 chosen charts always reflect what the user actually asked about.
+
+_TOPIC_KEYWORDS: dict[str, list[str]] = {
+    "income":            ["income", "gdp", "salary", "wages", "earnings", "wealth",
+                          "rich", "prosperity", "afford", "purchasing power", "standard of living"],
+    "economic_stability":["economic", "stability", "stable", "macro", "economy",
+                          "financial", "fiscal", "recession", "growth"],
+    "employment":        ["employment", "job", "work", "unemployment", "labour",
+                          "labor", "workforce", "career", "opportunity", "hire", "occupation"],
+    "youth":             ["youth", "young", "graduate", "student", "millennial"],
+    "education":         ["education", "school", "university", "college", "learning",
+                          "academic", "study", "literacy", "knowledge", "training", "skill"],
+    "health":            ["health", "healthcare", "medical", "hospital", "doctor",
+                          "physician", "wellness", "medicine", "disease", "care"],
+    "longevity":         ["longevity", "life expectancy", "lifespan", "age", "aging",
+                          "mortality", "survival"],
+    "child":             ["child", "children", "infant", "baby", "maternal", "newborn",
+                          "birth", "pediatric"],
+    "safety":            ["safe", "safety", "conflict", "violence", "war", "crime",
+                          "terrorism", "security", "danger", "risk", "threat", "peace"],
+    "governance":        ["governance", "political", "corruption", "democracy",
+                          "rule of law", "institution", "policy", "government", "law"],
+    "environment":       ["environment", "environmental", "climate", "carbon",
+                          "emissions", "green", "sustainable", "nature", "ecology", "co2"],
+    "air_quality":       ["air", "pollution", "pm2.5", "smog", "breathe", "air quality"],
+    "infrastructure":    ["infrastructure", "sanitation", "electricity", "power",
+                          "utility", "public service", "access", "facility"],
+    "water":             ["water", "sanitation", "sewage", "drinking", "clean water",
+                          "hygiene", "wash"],
+    "internet":          ["internet", "digital", "technology", "connectivity", "online",
+                          "tech", "innovation", "startup", "broadband"],
+    "poverty":           ["poverty", "poor", "destitute", "deprivation", "developing",
+                          "underdeveloped", "welfare", "subsistence"],
+    "inequality":        ["inequality", "gini", "gap", "disparity", "income gap",
+                          "wealth gap", "equal"],
+    "gender":            ["gender", "women", "female", "equality", "girl",
+                          "maternity", "feminist", "lgbtq", "diversity"],
+    "quality_of_life":   ["quality of life", "quality", "lifestyle", "living standard",
+                          "wellbeing", "happiness", "relocation", "migrate", "moving",
+                          "expat", "emigrate", "immigrate", "settle"],
+    "cost_of_living":    ["cost of living", "affordable", "cheap", "expensive",
+                          "price level", "inflation", "purchasing"],
+}
+
+
+def _topic_score(metric: dict, query_lower: str) -> int:
+    """Count how many distinct topic tags from the entry match the query string."""
+    if not query_lower:
+        return 0
+    score = 0
+    for tag in metric.get("tags", []):
+        for kw in _TOPIC_KEYWORDS.get(tag, [tag]):
+            if kw in query_lower:
+                score += 1
+                break  # one keyword match per tag is sufficient
+    return score
+
+
+# ── Metric registry ────────────────────────────────────────────────────────────
 #
 # Each entry defines:
-#   type       – "line" or "bar"
+#   type       – "line", "bar", "area", or "scatter"
+#   tags       – topic list used by _topic_score() for query-relevance ranking
 #   extractor  – callable(dataset) → DataFrame | float | None
 #   title, yaxis_title, source
-#   optional:  reference_y, reference_label (for bar charts)
+#   optional:  data_key (dedup), reference_y, reference_label, ascending
 
 def _metric_registry(countries_data: dict) -> list[dict]:
     return [
-        # ── Economic (line) ────────────────────────────────────────────────────
+        # ── Economy ────────────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["economic_stability", "income", "growth"],
             "extractor": lambda d: _wb_series(d, "gdp_growth"),
             "title": "GDP Growth Rate (%)",
             "yaxis_title": "Annual %",
             "source": "World Bank",
         },
-        # ── Scatter: country positioning (worldbank + employment) ─────────────
         {
             "type": "scatter",
+            "tags": ["income", "employment"],
             "x_extractor": _scalar_gdp_per_capita,
             "y_extractor": _scalar_unemployment,
             "title": "Country Positioning: GDP per Capita vs Unemployment Rate",
@@ -511,35 +577,35 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Unemployment Rate (%)",
             "source": "World Bank / ILO",
         },
-        # ── Economic (line) ────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["economic_stability", "cost_of_living"],
             "extractor": lambda d: _wb_series(d, "inflation"),
             "title": "Consumer Price Inflation (%)",
             "yaxis_title": "CPI Annual %",
             "source": "World Bank",
         },
-        # ── Labour (line) ──────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["employment"],
             "data_key": "unemployment_rate",
             "extractor": lambda d: _emp_series(d, "unemployment_rate"),
             "title": "Unemployment Rate (%)",
             "yaxis_title": "% of labour force",
             "source": "ILO / World Bank",
         },
-        # ── Area: GDP per capita trajectory (worldbank only) ─────────────────
         {
             "type": "area",
+            "tags": ["income", "wealth"],
             "data_key": "gdp_per_capita",
             "extractor": lambda d: _wb_series(d, "gdp_per_capita_usd"),
             "title": "GDP per Capita Trajectory — Filled Area (USD)",
             "yaxis_title": "GDP per Capita (USD)",
             "source": "World Bank",
         },
-        # ── Scatter: inflation vs unemployment (worldbank + employment) ───────
         {
             "type": "scatter",
+            "tags": ["economic_stability", "employment", "cost_of_living"],
             "x_extractor": _scalar_inflation,
             "y_extractor": _scalar_unemployment,
             "title": "Macroeconomic Mix: Inflation vs Unemployment (latest)",
@@ -547,9 +613,9 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Unemployment Rate (%)",
             "source": "World Bank / ILO",
         },
-        # ── Bar: snapshot GDP per capita (worldbank only) ─────────────────────
         {
             "type": "bar",
+            "tags": ["income", "wealth"],
             "data_key": "gdp_per_capita",
             "extractor": _scalar_gdp_per_capita,
             "title": "GDP per Capita — Latest Snapshot (USD)",
@@ -559,6 +625,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["employment"],
             "extractor": lambda d: _wb_series(d, "unemployment"),
             "title": "Unemployment Rate – World Bank (%)",
             "yaxis_title": "%",
@@ -566,6 +633,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["employment", "youth"],
             "extractor": lambda d: _emp_series(d, "youth_unemployment_rate"),
             "title": "Youth Unemployment Rate (%)",
             "yaxis_title": "% youth labour",
@@ -574,6 +642,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Inequality / governance ────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["inequality", "poverty"],
             "extractor": lambda d: _wb_series(d, "gini"),
             "title": "Income Inequality (Gini Index)",
             "yaxis_title": "Gini (0–100)",
@@ -581,14 +650,16 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["safety", "governance"],
             "extractor": lambda d: _wb_series(d, "political_stability"),
             "title": "Political Stability Index",
             "yaxis_title": "Score",
             "source": "World Bank WGI",
         },
-        # ── Health & Education ─────────────────────────────────────────────────
+        # ── Health ─────────────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["health"],
             "data_key": "health_expenditure_gdp",
             "extractor": lambda d: _wb_series(d, "health_expenditure_gdp"),
             "title": "Health Expenditure (% of GDP)",
@@ -597,6 +668,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["health"],
             "data_key": "health_expenditure_gdp",
             "extractor": _scalar_health_expenditure,
             "title": "Health Expenditure — Latest Snapshot (% GDP)",
@@ -606,6 +678,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["health"],
             "data_key": "physicians_per_1000",
             "extractor": _scalar_physicians,
             "title": "Physicians per 1,000 People",
@@ -613,8 +686,10 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "source": "World Bank",
             "ascending": False,
         },
+        # ── Education ──────────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["education"],
             "data_key": "education_spend_gdp",
             "extractor": lambda d: _wb_series(d, "education_spend_gdp"),
             "title": "Education Spending (% of GDP)",
@@ -623,6 +698,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["education"],
             "data_key": "education_spend_gdp",
             "extractor": _scalar_education,
             "title": "Education Spending — Latest Snapshot (% GDP)",
@@ -633,6 +709,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Poverty ────────────────────────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["poverty", "inequality"],
             "data_key": "poverty_headcount",
             "extractor": _scalar_poverty,
             "title": "Poverty Headcount — National Poverty Line (%)",
@@ -640,9 +717,10 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "source": "World Bank",
             "ascending": False,
         },
-        # ── Scatter: health spend vs physicians ───────────────────────────────
+        # ── Health scatters ────────────────────────────────────────────────────
         {
             "type": "scatter",
+            "tags": ["health"],
             "x_extractor": _scalar_health_expenditure,
             "y_extractor": _scalar_physicians,
             "title": "Healthcare Investment: Spending vs Physician Density",
@@ -650,9 +728,9 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Physicians per 1,000",
             "source": "World Bank",
         },
-        # ── Scatter: poverty vs GDP per capita ─────────────────────────────────
         {
             "type": "scatter",
+            "tags": ["poverty", "income", "inequality"],
             "x_extractor": _scalar_gdp_per_capita,
             "y_extractor": _scalar_poverty,
             "title": "Wealth vs Poverty: GDP per Capita vs Poverty Rate",
@@ -660,9 +738,9 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "Poverty Headcount (%)",
             "source": "World Bank",
         },
-        # ── Scatter: GDP per capita vs GDP growth (worldbank only) ────────────
         {
             "type": "scatter",
+            "tags": ["income", "economic_stability", "growth"],
             "x_extractor": _scalar_gdp_per_capita,
             "y_extractor": _scalar_gdp_growth,
             "title": "Wealth vs Momentum: GDP per Capita vs GDP Growth",
@@ -673,6 +751,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Life expectancy (line + bar) ──────────────────────────────────────
         {
             "type": "line",
+            "tags": ["health", "longevity"],
             "data_key": "life_expectancy",
             "extractor": lambda d: _wb_series(d, "life_expectancy"),
             "title": "Life Expectancy at Birth (years)",
@@ -681,6 +760,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["health", "longevity"],
             "data_key": "life_expectancy_bar",
             "extractor": _scalar_life_expectancy,
             "title": "Life Expectancy — Latest Snapshot (years)",
@@ -691,6 +771,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Infant mortality (bar) ─────────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["health", "child"],
             "data_key": "infant_mortality",
             "extractor": _scalar_infant_mortality,
             "title": "Infant Mortality Rate (per 1,000 live births) — lower is better",
@@ -701,6 +782,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Scatter: life expectancy vs health expenditure ────────────────────
         {
             "type": "scatter",
+            "tags": ["health", "longevity"],
             "x_extractor": _scalar_health_expenditure,
             "y_extractor": _scalar_life_expectancy,
             "title": "Health Investment vs Outcomes: Spending vs Life Expectancy",
@@ -711,6 +793,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Sanitation & clean water (bar) ─────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["infrastructure", "water"],
             "data_key": "sanitation_access",
             "extractor": _scalar_sanitation_access,
             "title": "Sanitation Access (% of population)",
@@ -720,6 +803,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["water", "infrastructure"],
             "data_key": "clean_water_access",
             "extractor": _scalar_clean_water_access,
             "title": "Clean Water Access (% of population)",
@@ -730,6 +814,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Scatter: sanitation vs clean water (infrastructure comparison) ────
         {
             "type": "scatter",
+            "tags": ["water", "infrastructure"],
             "x_extractor": _scalar_sanitation_access,
             "y_extractor": _scalar_clean_water_access,
             "title": "Infrastructure Gap: Sanitation vs Clean Water Access",
@@ -740,6 +825,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Electricity & internet access ────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["infrastructure", "internet"],
             "data_key": "electricity_access",
             "extractor": _scalar_electricity_access,
             "title": "Electricity Access (% of population)",
@@ -749,6 +835,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["internet", "infrastructure"],
             "data_key": "internet_users",
             "extractor": lambda d: _wb_series(d, "internet_users_pct"),
             "title": "Internet Users (% of population)",
@@ -757,6 +844,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["internet", "infrastructure"],
             "data_key": "internet_users_bar",
             "extractor": _scalar_internet_users,
             "title": "Internet Penetration — Latest Snapshot (%)",
@@ -767,6 +855,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Homicide rate (bar) ──────────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["safety", "governance"],
             "data_key": "homicide_rate",
             "extractor": _scalar_homicide_rate,
             "title": "Homicide Rate (per 100,000 people) — lower is safer",
@@ -777,6 +866,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Rule of law (line) ───────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["governance", "safety"],
             "data_key": "rule_of_law",
             "extractor": lambda d: _wb_series(d, "rule_of_law"),
             "title": "Rule of Law Index",
@@ -786,6 +876,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Scatter: rule of law vs homicide rate ─────────────────────────────
         {
             "type": "scatter",
+            "tags": ["governance", "safety"],
             "x_extractor": _scalar_rule_of_law,
             "y_extractor": _scalar_homicide_rate,
             "title": "Governance vs Safety: Rule of Law vs Homicide Rate",
@@ -796,6 +887,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Women in parliament (bar + line) ─────────────────────────────────
         {
             "type": "bar",
+            "tags": ["gender", "governance"],
             "data_key": "women_in_parliament",
             "extractor": _scalar_women_parliament,
             "title": "Women in Parliament (% of seats)",
@@ -805,6 +897,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["gender", "governance"],
             "data_key": "women_parliament_trend",
             "extractor": lambda d: _wb_series(d, "women_in_parliament"),
             "title": "Women in Parliament — Trend (%)",
@@ -814,6 +907,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── CO₂ per capita (line + bar) ──────────────────────────────────────
         {
             "type": "line",
+            "tags": ["environment"],
             "data_key": "co2_trend",
             "extractor": lambda d: _wb_series(d, "co2_per_capita"),
             "title": "CO₂ Emissions per Capita (tonnes)",
@@ -822,6 +916,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["environment"],
             "data_key": "co2_bar",
             "extractor": _scalar_co2_per_capita,
             "title": "CO₂ Emissions — Latest Snapshot (t per capita)",
@@ -832,6 +927,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── GNI per capita PPP (bar) ─────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["income", "quality_of_life"],
             "data_key": "gni_per_capita",
             "extractor": _scalar_gni_per_capita,
             "title": "GNI per Capita PPP — Purchasing Power (int. $)",
@@ -842,6 +938,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Scatter: GNI per capita vs life expectancy ────────────────────────
         {
             "type": "scatter",
+            "tags": ["income", "longevity", "quality_of_life"],
             "x_extractor": _scalar_gni_per_capita,
             "y_extractor": _scalar_life_expectancy,
             "title": "Living Standards: GNI per Capita vs Life Expectancy",
@@ -852,6 +949,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Climate ────────────────────────────────────────────────────────────
         {
             "type": "line",
+            "tags": ["environment"],
             "extractor": lambda d: _climate_series(d, "avg_temp_anomaly_c"),
             "title": "Temperature Anomaly vs Baseline (°C)",
             "yaxis_title": "°C",
@@ -859,6 +957,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "line",
+            "tags": ["environment"],
             "extractor": lambda d: _climate_series(d, "annual_precipitation_mm"),
             "title": "Annual Precipitation (mm)",
             "yaxis_title": "mm/year",
@@ -867,6 +966,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Environment snapshot (bar) ─────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["air_quality", "environment"],
             "extractor": _scalar_aqi,
             "title": "Air Quality: Average PM2.5 — lower is better",
             "yaxis_title": "μg/m³",
@@ -878,6 +978,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Safety snapshot (bar) ─────────────────────────────────────────────
         {
             "type": "bar",
+            "tags": ["safety"],
             "extractor": _scalar_conflict,
             "title": "ACLED: Conflict Event Count",
             "yaxis_title": "Events",
@@ -886,6 +987,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
+            "tags": ["quality_of_life"],
             "extractor": _scalar_teleport,
             "title": "Quality-of-Life Score (Teleport, 0–10)",
             "yaxis_title": "Score /10",
@@ -895,6 +997,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Area: temperature anomaly ───────────────────────────────────────────
         {
             "type": "area",
+            "tags": ["environment"],
             "extractor": lambda d: _climate_series(d, "avg_temp_anomaly_c"),
             "title": "Temperature Anomaly Trend — Filled Area (°C)",
             "yaxis_title": "°C vs baseline",
@@ -938,6 +1041,153 @@ def _count_countries_with_data(metric: dict, countries_data: dict) -> int:
         except Exception:
             pass
     return count
+
+
+# ── Registry key helpers ───────────────────────────────────────────────────────
+
+def _entry_key(metric: dict, idx: int) -> str:
+    """Derive a stable string key for a registry entry.
+
+    Prefers the explicit `data_key` field; otherwise slugifies the title.
+    The visual type is always appended to distinguish line vs bar for the same
+    underlying metric (e.g. `life_expectancy_line` vs `life_expectancy_bar`).
+    """
+    if metric.get("data_key"):
+        return f"{metric['data_key']}_{metric['type']}"
+    slug = re.sub(r"[^a-z0-9]+", "_", metric.get("title", "").lower()).strip("_")
+    return f"{slug[:40]}_{metric['type']}"
+
+
+def _countries_with_data(metric: dict, countries_data: dict) -> list[str]:
+    """Return names of countries that have non-None data for this metric."""
+    mtype = metric.get("type", "line")
+    result: list[str] = []
+
+    if mtype == "scatter":
+        x_ext = metric.get("x_extractor")
+        y_ext = metric.get("y_extractor")
+        if not x_ext or not y_ext:
+            return result
+        for country, dataset in countries_data.items():
+            try:
+                if x_ext(dataset) is not None and y_ext(dataset) is not None:
+                    result.append(country)
+            except Exception:
+                pass
+        return result
+
+    extractor = metric.get("extractor")
+    if not extractor:
+        return result
+    for country, dataset in countries_data.items():
+        try:
+            v = extractor(dataset)
+            if v is not None:
+                if isinstance(v, pd.DataFrame):
+                    if not v.empty:
+                        result.append(country)
+                else:
+                    result.append(country)
+        except Exception:
+            pass
+    return result
+
+
+def build_registry_manifest(countries_data: dict) -> list[dict]:
+    """Return a JSON-safe manifest of every registry entry with data availability.
+
+    Each entry includes:
+      key                – stable identifier (used by LLM + render_charts_by_keys)
+      title              – human-readable chart name
+      type               – line | bar | scatter | area
+      tags               – topic tags for relevance scoring
+      source             – data source name
+      countries_with_data – list of country names that have data for this chart
+    """
+    registry = _metric_registry(countries_data)
+    manifest: list[dict] = []
+    seen_keys: set[str] = set()
+    for idx, m in enumerate(registry):
+        key = _entry_key(m, idx)
+        # Make key unique if collision (shouldn't normally happen)
+        if key in seen_keys:
+            key = f"{key}_{idx}"
+        seen_keys.add(key)
+        manifest.append({
+            "key": key,
+            "title": m.get("title", ""),
+            "type": m.get("type", "line"),
+            "tags": m.get("tags", []),
+            "source": m.get("source", ""),
+            "countries_with_data": _countries_with_data(m, countries_data),
+            # Keep the original metric dict reference for rendering — not sent to LLM
+            "_metric": m,
+        })
+    return manifest
+
+
+def render_charts_by_keys(
+    keys: list[str],
+    manifest: list[dict],
+    countries_data: dict,
+) -> list[str]:
+    """Render exactly the charts identified by `keys`.
+
+    Returns a list of Plotly JSON strings.  Missing / invalid keys produce a
+    no-data placeholder so the output always has the same length as `keys`.
+    """
+    countries = list(countries_data.keys())
+    colors = _color_map(countries)
+    key_to_metric = {entry["key"]: entry["_metric"] for entry in manifest}
+    charts: list[str] = []
+
+    for key in keys:
+        metric = key_to_metric.get(key)
+        if metric is None:
+            fig = _no_data_fig("Chart", f"Chart key '{key}' not found in registry.", "")
+            charts.append(fig.to_json())
+            continue
+        mtype = metric.get("type", "line")
+        try:
+            if mtype == "line":
+                fig = _build_line_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"], metric["yaxis_title"], metric["source"],
+                )
+            elif mtype == "bar":
+                fig = _build_bar_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"], metric["yaxis_title"], metric["source"],
+                    reference_y=metric.get("reference_y"),
+                    reference_label=metric.get("reference_label", ""),
+                    ascending=metric.get("ascending", False),
+                )
+            elif mtype == "scatter":
+                fig = _build_scatter_chart(
+                    countries_data, colors,
+                    metric["x_extractor"], metric["y_extractor"],
+                    metric["title"], metric["xaxis_title"], metric["yaxis_title"],
+                    metric["source"],
+                )
+            elif mtype == "area":
+                fig = _build_area_chart(
+                    countries_data, colors,
+                    metric["extractor"],
+                    metric["title"], metric["yaxis_title"], metric["source"],
+                )
+            else:
+                fig = _no_data_fig(metric["title"], "Unknown chart type.", metric.get("source", ""))
+        except Exception:
+            fig = _no_data_fig(
+                metric.get("title", "Chart"),
+                "An error occurred while building this chart.",
+                metric.get("source", ""),
+            )
+        charts.append(fig.to_json())
+
+    return charts
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -997,15 +1247,40 @@ def build_country_comparison_charts(
     candidates = [(m, n) for m, n in candidates if n >= 2]
 
     # ── Sort candidates: query-relevant first, then by coverage ───────────────
-    # This ensures that for an "internet" query, internet_users charts bubble
-    # to the top even if GDP has slightly more country coverage.
-    if worldbank_indicators:
-        candidates.sort(
-            key=lambda item: (
-                0 if _chart_is_relevant(item[0], worldbank_indicators) else 1,
-                -item[1],  # descending coverage within each relevance bucket
-            )
-        )
+    # Scoring has two components:
+    #   1. topic_score  — how many of this chart's tags match the query string
+    #   2. tool_bonus   — +1 if the chart's source tool was actually selected,
+    #                     0 if the tool wasn't selected (e.g. Open-Meteo / ACLED
+    #                     charts when only worldbank was requested)
+    # Final sort: (topic_score + tool_bonus DESC, coverage DESC) — so relevant
+    # charts from selected tools always beat irrelevant filler from other tools.
+    _SOURCE_TOOL_MAP = {
+        "world bank":  "worldbank",
+        "world bank wgi": "worldbank",
+        "ilo":         "employment",
+        "ilo / world Bank": "employment",
+        "openaq":      "environment",
+        "open-meteo":  "environment",
+        "acled":       "acled",
+        "teleport":    "teleport",
+        "unhcr":       "unhcr",
+    }
+
+    def _tool_bonus(metric: dict) -> int:
+        src = metric.get("source", "").lower()
+        for key, tool in _SOURCE_TOOL_MAP.items():
+            if key in src:
+                return 1 if tool in selected_tools else 0
+        return 1  # unknown source — don't penalise
+
+    query_lower = (query_focus or "").lower()
+    candidates.sort(
+        key=lambda item: (
+            _topic_score(item[0], query_lower) + _tool_bonus(item[0]),
+            item[1],
+        ),
+        reverse=True,
+    )
 
     # Three-pass selection:
     #   Pass 1 (variety): at most 1 of each visual type — max 4 distinct types.

@@ -30,14 +30,20 @@ from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from typing_extensions import override
 
-from agents.data_collector import collect_data_for_countries
+from agents.chart_selector import select_charts_with_llm
+from agents.data_collector import collect_data_for_countries, filter_countries_by_coverage
 from agents.eda_analyst import run_eda
 from agents.evidence_generator import generate_hypotheses
 from agents.pipeline_config import TOOL_DATA_KEYS
 from agents.tool_selector import analyze_query_with_llm
-from analysis.country_charts import build_country_comparison_charts
+from analysis.country_charts import (
+    build_country_comparison_charts,
+    build_registry_manifest,
+    render_charts_by_keys,
+)
 from analysis.eda_charts import build_eda_charts
 from models.schemas import HypothesisInsight, ToolSelectorOutput
+
 
 # ---------------------------------------------------------------------------
 # Context vars — set once per pipeline run; readable by every agent coroutine
@@ -101,6 +107,7 @@ class ToolSelectorADKAgent(BaseAgent):
             "year_to":       selector.year_to,
             "query_focus":   selector.query_focus,
             "proxy_note":    selector.proxy_note,
+            "country_strategy": selector.country_strategy,
             "k":             selector.k,
         })
 
@@ -149,12 +156,45 @@ class DataCollectorADKAgent(BaseAgent):
             selector.year_to,
         )
 
+        (
+            countries_data,
+            validated_countries,
+            validated_codes,
+            coverage_ranking,
+        ) = filter_countries_by_coverage(
+            countries_data,
+            selector.country_codes,
+            selector.selected_tools,
+            selector.k,
+        )
+
+        selector.countries = validated_countries
+        selector.country_codes = validated_codes
+        selector.k = len(validated_countries)
+
+        _emit("selection", {
+            "countries": selector.countries,
+            "country_codes": selector.country_codes,
+            "tools": selector.selected_tools,
+            "year_from": selector.year_from,
+            "year_to": selector.year_to,
+            "query_focus": selector.query_focus,
+            "proxy_note": selector.proxy_note,
+            "k": selector.k,
+            "country_strategy": selector.country_strategy,
+            "coverage_ranking": coverage_ranking,
+        })
+
         yield Event(
             invocation_id=ctx.invocation_id,
             author=self.name,
             branch=ctx.branch,
             actions=EventActions(
-                state_delta={"countries_data": countries_data}
+                state_delta={
+                    "countries_data": countries_data,
+                    "selector_output": selector.model_dump(),
+                    "coverage_ranking": coverage_ranking,
+                }
             ),
         )
 
@@ -259,17 +299,44 @@ class ChartEvidenceADKAgent(BaseAgent):
             ),
         })
 
-        # Run chart building (sync/CPU) and hypothesis LLM call concurrently
-        chart_jsons, hypotheses = await asyncio.gather(
-            asyncio.to_thread(
+        # Build the chart manifest once (sync, cheap — no LLM, no HTTP)
+        manifest = await asyncio.to_thread(build_registry_manifest, countries_data)
+
+        # Run LLM chart selection and hypothesis generation concurrently.
+        # select_charts_with_llm uses Gemini to pick the 4 most relevant chart
+        # keys given the query and the data manifest.  generate_hypotheses is
+        # the existing evidence LLM call.  Both are async so asyncio.gather
+        # runs them in parallel with no extra latency cost.
+        selected_keys, hypotheses = await asyncio.gather(
+            select_charts_with_llm(
+                query,
+                manifest,
+                selector.selected_tools,
+                selector.query_focus,
+            ),
+            generate_hypotheses(
+                query, countries_data, selector.selected_tools,
+                eda_findings, selector.query_focus,
+            ),
+        )
+
+        # Fallback: if the LLM returned fewer than 4 valid keys, fill the rest
+        # using the heuristic scorer so we always produce 4 charts.
+        if len(selected_keys) < 4:
+            chart_jsons = await asyncio.to_thread(
                 build_country_comparison_charts,
                 countries_data,
                 selector.selected_tools,
                 selector.query_focus,
-                selector.worldbank_indicators,   # prioritise query-relevant charts
-            ),
-            generate_hypotheses(query, countries_data, selector.selected_tools, eda_findings, selector.query_focus),
-        )
+                selector.worldbank_indicators,
+            )
+        else:
+            chart_jsons = await asyncio.to_thread(
+                render_charts_by_keys,
+                selected_keys,
+                manifest,
+                countries_data,
+            )
 
         # Normalise Plotly JSON strings → dicts for the browser JS client
         charts_normalized: list[Any] = []
