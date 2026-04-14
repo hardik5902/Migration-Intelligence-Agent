@@ -130,7 +130,6 @@ class ToolSelection(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     worldbank: bool = True
-    unhcr: bool = True
     acled: bool = False
     teleport: bool = True
     news: bool = False
@@ -150,7 +149,6 @@ class MigrationDataset(BaseModel):
     year_from: int = 2010
     year_to: int = 2023
     intent: str = "push_factor"
-    displacement: list[dict[str, Any]] = Field(default_factory=list)
     destinations: list[dict[str, Any]] = Field(default_factory=list)
     worldbank: list[dict[str, Any]] = Field(default_factory=list)
     conflict_events: list[dict[str, Any]] = Field(default_factory=list)

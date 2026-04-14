@@ -174,13 +174,6 @@ def _scalar_aqi(dataset: dict) -> float | None:
     return float(v) if pd.notna(v) else None
 
 
-def _scalar_disp(dataset: dict) -> float | None:
-    disp = pd.DataFrame(dataset.get("displacement") or [])
-    if disp.empty or "value" not in disp.columns:
-        return None
-    total = disp["value"].sum()
-    return float(total) if total > 0 else None
-
 
 def _scalar_conflict(dataset: dict) -> float | None:
     conf = pd.DataFrame(dataset.get("conflict_events") or [])
@@ -526,9 +519,9 @@ _TOPIC_KEYWORDS: dict[str, list[str]] = {
                           "wealth gap", "equal"],
     "gender":            ["gender", "women", "female", "equality", "girl",
                           "maternity", "feminist", "lgbtq", "diversity"],
-    "quality_of_life":   ["quality of life", "quality", "lifestyle", "living standard",
+    "quality_of_life":   ["quality of life", "lifestyle", "living standard",
                           "wellbeing", "happiness", "relocation", "migrate", "moving",
-                          "expat", "emigrate", "immigrate", "settle"],
+                          "expat", "emigrate", "immigrate", "settle", "overall quality"],
     "cost_of_living":    ["cost of living", "affordable", "cheap", "expensive",
                           "price level", "inflation", "purchasing"],
 }
@@ -908,26 +901,26 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         {
             "type": "line",
             "tags": ["environment"],
-            "data_key": "co2_trend",
+            "data_key": "co2_per_capita",
             "extractor": lambda d: _wb_series(d, "co2_per_capita"),
-            "title": "CO₂ Emissions per Capita (tonnes)",
-            "yaxis_title": "Tonnes CO₂/person",
+            "title": "CO2 Emissions per Capita (tonnes)",
+            "yaxis_title": "Tonnes CO2/person",
             "source": "World Bank",
         },
         {
             "type": "bar",
             "tags": ["environment"],
-            "data_key": "co2_bar",
+            "data_key": "co2_per_capita_bar",
             "extractor": _scalar_co2_per_capita,
-            "title": "CO₂ Emissions — Latest Snapshot (t per capita)",
-            "yaxis_title": "Tonnes CO₂/person",
+            "title": "CO2 Emissions — Latest Snapshot (t per capita)",
+            "yaxis_title": "Tonnes CO2/person",
             "source": "World Bank",
             "ascending": False,
         },
         # ── GNI per capita PPP (bar) ─────────────────────────────────────────
         {
             "type": "bar",
-            "tags": ["income", "quality_of_life"],
+            "tags": ["income", "wealth", "cost_of_living"],
             "data_key": "gni_per_capita",
             "extractor": _scalar_gni_per_capita,
             "title": "GNI per Capita PPP — Purchasing Power (int. $)",
@@ -938,7 +931,7 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         # ── Scatter: GNI per capita vs life expectancy ────────────────────────
         {
             "type": "scatter",
-            "tags": ["income", "longevity", "quality_of_life"],
+            "tags": ["income", "longevity", "health"],
             "x_extractor": _scalar_gni_per_capita,
             "y_extractor": _scalar_life_expectancy,
             "title": "Living Standards: GNI per Capita vs Life Expectancy",
@@ -987,9 +980,10 @@ def _metric_registry(countries_data: dict) -> list[dict]:
         },
         {
             "type": "bar",
-            "tags": ["quality_of_life"],
+            "tags": ["quality_of_life", "relocation"],
+            "data_key": "teleport_score_bar",
             "extractor": _scalar_teleport,
-            "title": "Quality-of-Life Score (Teleport, 0–10)",
+            "title": "Composite Quality-of-Life Score (Teleport, 0–10)",
             "yaxis_title": "Score /10",
             "source": "Teleport",
             "ascending": True,
@@ -1144,10 +1138,11 @@ def render_charts_by_keys(
     for key in keys:
         metric = key_to_metric.get(key)
         if metric is None:
-            fig = _no_data_fig("Chart", f"Chart key '{key}' not found in registry.", "")
-            charts.append(fig.to_json())
+            # Hard rule: skip unknown keys — never emit a blank chart
+            print(f"[CHARTS] key '{key}' not found in registry — skipping")
             continue
         mtype = metric.get("type", "line")
+        fig = None
         try:
             if mtype == "line":
                 fig = _build_line_chart(
@@ -1177,31 +1172,38 @@ def render_charts_by_keys(
                     metric["extractor"],
                     metric["title"], metric["yaxis_title"], metric["source"],
                 )
-            else:
-                fig = _no_data_fig(metric["title"], "Unknown chart type.", metric.get("source", ""))
-        except Exception:
-            fig = _no_data_fig(
-                metric.get("title", "Chart"),
-                "An error occurred while building this chart.",
-                metric.get("source", ""),
-            )
-        charts.append(fig.to_json())
+        except Exception as e:
+            print(f"[CHARTS] render failed for key '{key}': {e}")
+            fig = None
+
+        # Hard rule: only keep charts with actual data traces
+        if fig is not None and len(fig.data) > 0:
+            charts.append(fig.to_json())
 
     return charts
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+_KW_STOPWORDS = frozenset({
+    "rate", "per", "pct", "usd", "gdp", "index", "score",
+    "total", "capita", "annual", "the", "and", "for",
+})
+
+
 def _indicator_keywords(indicator: str) -> list[str]:
     """Extract searchable keywords from a World Bank indicator name.
 
     e.g. "internet_users_pct" → ["internet", "users"]
          "life_expectancy"    → ["life", "expectancy"]
-         "co2_per_capita"     → ["co2", "capita"]
+         "co2_per_capita"     → ["co2"]
+         "adolescent_fertility_rate" → ["adolescent", "fertility"]
     """
-    # Strip common suffixes that don't help matching
     cleaned = indicator.replace("_pct", "").replace("_usd", "").replace("_gdp", "")
-    return [p for p in cleaned.split("_") if len(p) > 2]
+    return [
+        p for p in cleaned.split("_")
+        if len(p) > 3 and p not in _KW_STOPWORDS
+    ]
 
 
 def _chart_is_relevant(metric: dict, worldbank_indicators: list[str]) -> bool:
@@ -1263,7 +1265,6 @@ def build_country_comparison_charts(
         "open-meteo":  "environment",
         "acled":       "acled",
         "teleport":    "teleport",
-        "unhcr":       "unhcr",
     }
 
     def _tool_bonus(metric: dict) -> int:
@@ -1318,23 +1319,16 @@ def build_country_comparison_charts(
     _pick(max_per_type=2)   # allow pairs
     _pick(max_per_type=None)  # fill rest
 
-    # If we still couldn't fill 4, fall back to empty-state placeholders
-    while len(chosen) < 4:
-        chosen.append({
-            "type": "empty",
-            "title": "No Additional Data",
-            "message": "No further data was returned by the selected tools.",
-            "source": "",
-        })
+    # Hard rule: never emit more charts than we have real data for.
+    # Blank/placeholder charts are never shown.
 
-    # Build figures
+    # Build figures — hard rule: skip any chart that has no real data
     charts: list[str] = []
-    for metric in chosen[:4]:
+    for metric in chosen:
         mtype = metric.get("type", "line")
+        fig = None
         try:
-            if mtype == "empty":
-                fig = _no_data_fig(metric["title"], metric.get("message", ""), metric["source"])
-            elif mtype == "line":
+            if mtype == "line":
                 fig = _build_line_chart(
                     countries_data, colors,
                     metric["extractor"],
@@ -1371,14 +1365,12 @@ def build_country_comparison_charts(
                     metric["yaxis_title"],
                     metric["source"],
                 )
-            else:
-                fig = _no_data_fig(metric["title"], "Unknown chart type.", metric.get("source", ""))
-        except Exception:
-            fig = _no_data_fig(
-                metric.get("title", "Chart"),
-                "An error occurred while building this chart.",
-                metric.get("source", ""),
-            )
-        charts.append(fig.to_json())
+        except Exception as e:
+            print(f"[CHARTS] chart build failed for '{metric.get('title', '?')}': {e}")
+            fig = None
+
+        # Only keep charts that actually have data (no-data figures have no traces)
+        if fig is not None and len(fig.data) > 0:
+            charts.append(fig.to_json())
 
     return charts

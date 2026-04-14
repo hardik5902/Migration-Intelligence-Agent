@@ -173,6 +173,8 @@
             </div>
           </div>
           <p class="query-focus-text hidden" id="query-focus-text"></p>
+          <!-- Per-country data coverage warnings (shown when some tools returned no data) -->
+          <div id="coverage-warnings" class="coverage-warnings hidden"></div>
         </section>
 
         <!-- Tool status -->
@@ -275,6 +277,8 @@
         $('period-label').textContent = '';
         $('query-focus-text').textContent = '';
         hide($('query-focus-text'));
+        const covWarn = $('coverage-warnings');
+        if (covWarn) { covWarn.innerHTML = ''; hide(covWarn); }
         $('tool-status-grid').innerHTML = '';
         $('eda-findings-grid').innerHTML = '';
         $('eda-charts-grid').innerHTML = '';
@@ -297,7 +301,9 @@
 
       function onSelection(d) {
         // Populate header immediately when we know countries + tools
+        // Clear first to prevent duplication when selection is re-emitted after filtering
         const countriesEl = $('countries-chips');
+        countriesEl.innerHTML = '';
         d.countries.forEach(c => {
           const span = document.createElement('span');
           span.className = 'chip chip-country';
@@ -306,6 +312,7 @@
         });
 
         const toolsEl = $('tools-chips');
+        toolsEl.innerHTML = '';
         d.tools.forEach(t => {
           const span = document.createElement('span');
           span.className = 'chip chip-tool';
@@ -334,6 +341,41 @@
           box.classList.remove('hidden');
         }
 
+        // Per-country coverage warnings
+        const covEl = $('coverage-warnings');
+        covEl.innerHTML = '';
+        const ranking = d.coverage_ranking || [];
+        const tools = d.tools || [];
+        // Build warnings only for countries with partial coverage
+        const warnings = [];
+        ranking.forEach(item => {
+          const missingTools = tools.filter(t => (item.per_tool || {})[t] === 0);
+          if (missingTools.length > 0 && missingTools.length < tools.length) {
+            warnings.push({ country: item.country, missing: missingTools });
+          } else if (tools.length > 0 && item.matched_tools === 0) {
+            warnings.push({ country: item.country, missing: tools });
+          }
+        });
+        if (warnings.length > 0) {
+          const intro = document.createElement('p');
+          intro.className = 'coverage-intro';
+          intro.textContent = 'Partial data — some tools returned no data for:';
+          covEl.appendChild(intro);
+          const row = document.createElement('div');
+          row.className = 'coverage-chips-row';
+          warnings.forEach(w => {
+            const chip = document.createElement('span');
+            chip.className = 'chip chip-warn';
+            chip.title = `No data from: ${w.missing.join(', ')}`;
+            chip.innerHTML = `${w.country} <span class="chip-warn-detail">missing: ${w.missing.join(', ')}</span>`;
+            row.appendChild(chip);
+          });
+          covEl.appendChild(row);
+          show(covEl);
+        } else {
+          hide(covEl);
+        }
+
         show($('result-header-panel'));
         show(resShell);
       }
@@ -355,8 +397,7 @@
       };
 
       function onEda(d) {
-        const findings   = d.findings   || [];
-        const edaCharts  = d.eda_charts || [];
+        const findings = d.findings || [];
 
         // ── Finding cards ──────────────────────────────────────────────────────
         const grid = $('eda-findings-grid');
@@ -379,24 +420,34 @@
           show(resShell);
         }
 
-        // ── EDA charts ─────────────────────────────────────────────────────────
-        if (edaCharts.length) {
-          const cGrid = $('eda-charts-grid');
-          cGrid.innerHTML = '';
-          edaCharts.forEach((chart, i) => {
-            const article = document.createElement('article');
-            article.className = 'chart-card';
-            const div = document.createElement('div');
-            div.id = `eda-chart-${i}`;
-            div.className = 'plot-surface';
-            article.appendChild(div);
-            cGrid.appendChild(article);
-            Plotly.newPlot(`eda-chart-${i}`, chart.data, chart.layout,
-              { responsive: true, displayModeBar: false, displaylogo: false });
-          });
-          show($('eda-charts-wrap'));
-          requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
-        }
+        // EDA charts may arrive in the same event (legacy) or via separate eda_charts event
+        const edaCharts = d.eda_charts || [];
+        if (edaCharts.length) renderEdaCharts(edaCharts);
+      }
+
+      function onEdaCharts(d) {
+        const edaCharts = d.eda_charts || [];
+        if (edaCharts.length) renderEdaCharts(edaCharts);
+      }
+
+      function renderEdaCharts(edaCharts) {
+        const cGrid = $('eda-charts-grid');
+        cGrid.innerHTML = '';
+        edaCharts.forEach((chart, i) => {
+          const article = document.createElement('article');
+          article.className = 'chart-card';
+          const div = document.createElement('div');
+          div.id = `eda-chart-${i}`;
+          div.className = 'plot-surface';
+          article.appendChild(div);
+          cGrid.appendChild(article);
+          Plotly.newPlot(`eda-chart-${i}`, chart.data, chart.layout,
+            { responsive: true, displayModeBar: false, displaylogo: false });
+        });
+        show($('eda-charts-wrap'));
+        show($('eda-panel'));
+        show(resShell);
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
       }
 
       function onCharts(d) {
@@ -555,6 +606,7 @@
               case 'stage':        onStage(data);        break;
               case 'selection':    onSelection(data);    break;
               case 'eda':          onEda(data);          break;
+              case 'eda_charts':   onEdaCharts(data);    break;
               case 'charts':       onCharts(data);       break;
               case 'evidence':     onEvidence(data);     break;
               case 'out_of_scope': onOutOfScope(data);   break;

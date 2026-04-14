@@ -1,17 +1,23 @@
 """ADK BaseAgent implementations for the country comparison pipeline.
 
-Three agents run in sequence via ADK's SequentialAgent + Runner:
-  1. ToolSelectorADKAgent   — LLM picks tools + K countries
-  2. DataCollectorADKAgent  — parallel live-data fetch for every country
-  3. ChartEvidenceADKAgent  — chart building + evidence generation (concurrent)
+Four agents run in sequence via ADK's SequentialAgent + Runner:
+  1. ToolSelectorADKAgent    — LLM picks tools + K countries
+  2. DataCollectorADKAgent   — parallel live-data fetch for every country
+  3. EDAAnalystADKAgent      — EDA stats + data-coverage report + chart manifests
+  4. UnifiedAnalysisADKAgent — single LLM call: chart keys + hypotheses
 
 Session state is the data bus:
-  • user_query        (str)           — set before the runner starts
-  • selector_output   (dict)          — written by ToolSelectorADKAgent
-  • countries_data    (dict)          — written by DataCollectorADKAgent
-  • charts            (list)          — written by ChartEvidenceADKAgent
-  • hypotheses        (list)          — written by ChartEvidenceADKAgent
-  • tool_stats        (dict)          — written by ChartEvidenceADKAgent
+  • user_query          (str)   — set before the runner starts
+  • selector_output     (dict)  — written by ToolSelectorADKAgent
+  • countries_data      (dict)  — written by DataCollectorADKAgent
+  • eda_findings        (dict)  — written by EDAAnalystADKAgent
+  • data_coverage       (dict)  — written by EDAAnalystADKAgent
+  • comparison_manifest (list)  — written by EDAAnalystADKAgent
+  • eda_chart_manifest  (list)  — written by EDAAnalystADKAgent
+  • charts              (list)  — written by UnifiedAnalysisADKAgent
+  • eda_charts          (list)  — written by UnifiedAnalysisADKAgent
+  • hypotheses          (list)  — written by UnifiedAnalysisADKAgent
+  • tool_stats          (dict)  — written by UnifiedAnalysisADKAgent
 
 The SSE emit callback and the query are stored in contextvars so every agent
 can access them without needing them threaded through constructors.
@@ -326,8 +332,10 @@ class UnifiedAnalysisADKAgent(BaseAgent):
         eda_keys        = result["eda_chart_keys"]
         hypotheses      = result["hypotheses"]
 
-        # --- Render comparison charts (4) ---
-        if len(comparison_keys) >= 4:
+        # --- Render comparison charts ---
+        # Use LLM-selected keys if any were returned; fallback to heuristic only
+        # when the LLM returned zero valid keys.
+        if comparison_keys:
             comp_chart_jsons = await asyncio.to_thread(
                 render_charts_by_keys,
                 comparison_keys,
@@ -335,7 +343,7 @@ class UnifiedAnalysisADKAgent(BaseAgent):
                 countries_data,
             )
         else:
-            # Fallback to heuristic builder if LLM returned < 4 valid keys
+            # Heuristic fallback: query-relevance + coverage ranked selection
             comp_chart_jsons = await asyncio.to_thread(
                 build_country_comparison_charts,
                 countries_data,
@@ -449,11 +457,11 @@ def build_country_comparison_pipeline() -> SequentialAgent:
                     "and cross-country correlations. Stores eda_findings + eda_charts."
                 ),
             ),
-            ChartEvidenceADKAgent(
-                name="chart_evidence",
+            UnifiedAnalysisADKAgent(
+                name="unified_analysis",
                 description=(
-                    "Builds 4 comparison charts and 3 evidence insights "
-                    "informed by EDA findings."
+                    "Single LLM call: picks comparison charts, EDA charts, "
+                    "and writes 3 hypotheses from data coverage + EDA findings."
                 ),
             ),
         ],

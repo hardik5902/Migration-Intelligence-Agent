@@ -27,10 +27,6 @@ AVAILABLE_TOOLS: dict[str, str] = {
         "ACLED armed conflict events, fatalities, event types — "
         "covers safety, crime, conflict, and displacement pressure"
     ),
-    "unhcr":       (
-        "UNHCR Population API: refugee displacement outflows by year — "
-        "covers forced migration, asylum seekers, stateless persons"
-    ),
     "teleport":    (
         "Quality-of-life composite scores derived from World Bank data: "
         "Healthcare, Education, Safety, Economy, Cost of Living (each 0–10)"
@@ -51,7 +47,6 @@ TOOL_DATA_KEYS: dict[str, list[str]] = {
     "employment":  ["employment"],
     "environment": ["climate", "aqi"],
     "acled":       ["conflict_events"],
-    "unhcr":       ["displacement"],
     "teleport":    ["city_scores"],
     "news":        ["news"],
 }
@@ -67,7 +62,6 @@ HIGH_COVERAGE_DEFAULTS: list[str] = [
 
 
 TOOL_DEFAULT_COUNTRY_POOLS: dict[str, list[str]] = {
-    "unhcr": ["DEU", "CAN", "USA", "SWE", "AUS"],
     "acled": ["DEU", "CAN", "SWE", "NLD", "AUS"],
     "environment": ["CAN", "NZL", "SWE", "FIN", "AUS"],
     "employment": ["DEU", "CAN", "NLD", "SWE", "AUS"],

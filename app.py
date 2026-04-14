@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, render_template, request, stream_with_context
 
 from agents.country_pipeline import run_country_pipeline_streaming
+from agents.query_guard import check_query
 from tools.duckdb_tools import _ALLOWED_TABLES, _TTL_HOURS, _connect, db_path
 
 ROOT = Path(__file__).resolve().parent
@@ -84,6 +85,13 @@ def analyze() -> Response:
         def _err():
             yield _sse("error", {"message": "Please enter a question before running the analysis."})
         return Response(stream_with_context(_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    _safe, _reason = check_query(query)
+    if not _safe:
+        def _injection_err(_reason=_reason):
+            yield _sse("out_of_scope", {"reason": _reason})
+        return Response(stream_with_context(_injection_err()), content_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     if not _auth_ready():

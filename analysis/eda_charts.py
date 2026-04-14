@@ -77,8 +77,12 @@ def _base_layout(title: str, height: int = 460, source: str = "") -> dict:
 # Chart 1 — Correlation Heatmap  (go.Heatmap)
 # ---------------------------------------------------------------------------
 
-def _build_correlation_heatmap(latest_matrix: dict[str, dict]) -> go.Figure | None:
-    """Pearson correlation matrix across all available indicators (latest values)."""
+def _build_correlation_heatmap(
+    latest_matrix: dict[str, dict],
+    active_metrics_ordered: list[str] | None = None,
+    max_metrics: int = 10,
+) -> go.Figure | None:
+    """Pearson correlation matrix — filtered to query-relevant metrics only."""
     if not latest_matrix:
         return None
 
@@ -89,8 +93,22 @@ def _build_correlation_heatmap(latest_matrix: dict[str, dict]) -> go.Figure | No
     if numeric.shape[1] < 2 or numeric.shape[0] < 3:
         return None
 
+    # Filter and order columns to match active_metrics_ordered (query-relevant first)
+    # Cap at max_metrics to keep the heatmap readable
+    if active_metrics_ordered:
+        ordered_cols = [m for m in active_metrics_ordered if m in numeric.columns]
+        remaining = [c for c in numeric.columns if c not in ordered_cols]
+        ordered_cols = (ordered_cols + remaining)[:max_metrics]
+        numeric = numeric[[c for c in ordered_cols if c in numeric.columns]]
+
+    if numeric.shape[1] < 2:
+        return None
+
     # Use complete rows for correlation
     complete = numeric.dropna()
+    if len(complete) < 3:
+        # Relax: allow pairwise correlation if we have enough rows per pair
+        complete = numeric.dropna(thresh=max(2, numeric.shape[1] // 2))
     if len(complete) < 3:
         return None
 
@@ -123,17 +141,18 @@ def _build_correlation_heatmap(latest_matrix: dict[str, dict]) -> go.Figure | No
     ))
 
     n_metrics = len(labels)
-    cell_px = max(52, min(72, 400 // max(n_metrics, 1)))
-    h = max(460, cell_px * n_metrics + 160)
+    # Adaptive cell size: keep readable even with fewer metrics
+    cell_px = max(60, min(90, 540 // max(n_metrics, 1)))
+    h = max(460, cell_px * n_metrics + 200)
 
     layout = _base_layout(
-        "Indicator correlation matrix — latest values across countries",
+        f"Indicator correlation matrix — {n_metrics} metrics across countries",
         height=h,
-        source="World Bank · ILO · Open-Meteo (EDA)",
+        source="World Bank · ILO (EDA)",
     )
     layout.pop("legend", None)
-    layout["margin"] = dict(l=140, r=80, t=64, b=140)
-    layout["xaxis"] = dict(side="bottom", tickangle=-40, automargin=True, tickfont=dict(size=11))
+    layout["margin"] = dict(l=160, r=100, t=64, b=160)
+    layout["xaxis"] = dict(side="bottom", tickangle=-45, automargin=True, tickfont=dict(size=11))
     layout["yaxis"] = dict(automargin=True, tickfont=dict(size=11))
     fig.update_layout(**layout)
     return fig
@@ -356,8 +375,15 @@ def _build_anomaly_timeline(
 def _build_stats_spread(
     stats_summary: dict[str, dict],
     metric: str = "gdp_growth",
+    countries_data: dict | None = None,
 ) -> go.Figure | None:
-    """Bar chart showing mean ± 1 standard deviation per country."""
+    """Bar chart showing mean ± 1 standard deviation per country.
+
+    Falls back to a true box-plot when all means are effectively zero
+    (value range < 0.01) — this prevents a visually useless chart of flat
+    bars near the zero-line (e.g. temp-anomaly centred on 0).
+    Returns None if neither representation has meaningful spread.
+    """
     countries_with_data = [
         c for c in stats_summary
         if stats_summary[c].get(metric) and stats_summary[c][metric].get("n", 0) >= 2
@@ -365,6 +391,53 @@ def _build_stats_spread(
     if len(countries_with_data) < 2:
         return None
 
+    means = [stats_summary[c][metric]["mean"] for c in countries_with_data]
+    value_range = max(means) - min(means) if means else 0
+
+    # ── Fallback: build a boxplot from raw time-series when means are near-zero ──
+    if abs(value_range) < 0.01 and countries_data:
+        from agents.eda_analyst import _ALL_METRICS  # lazy import to avoid cycles
+        extractor_entry = _ALL_METRICS.get(metric)
+        if extractor_entry:
+            extractor_fn = extractor_entry[0]
+            traces = []
+            colors = [COUNTRY_COLORS[i % len(COUNTRY_COLORS)] for i in range(len(countries_with_data))]
+            for i, country in enumerate(countries_with_data):
+                dataset = countries_data.get(country, {})
+                vals, _years = extractor_fn(dataset)
+                if len(vals) >= 2:
+                    traces.append(go.Box(
+                        y=vals,
+                        name=country,
+                        marker_color=colors[i],
+                        boxmean="sd",
+                        hovertemplate=(
+                            f"<b>{country}</b><br>"
+                            "Value: %{y:.3f}<extra></extra>"
+                        ),
+                    ))
+            if len(traces) < 2:
+                return None
+            metric_label = metric.replace("_", " ").title()
+            fig = go.Figure(traces)
+            layout = _base_layout(
+                f"Distribution: {metric_label} — year-by-year spread per country",
+                height=480,
+                source="EDA statistical aggregation",
+            )
+            layout["yaxis"] = dict(
+                title=metric_label,
+                automargin=True,
+                gridcolor="rgba(30,27,24,0.07)",
+                zerolinecolor="rgba(30,27,24,0.15)",
+                tickfont=dict(size=11),
+            )
+            layout["xaxis"] = dict(automargin=True, tickfont=dict(size=11))
+            fig.update_layout(**layout)
+            return fig
+        return None  # no extractor → skip chart entirely
+
+    # ── Default: mean ± 1σ bar chart ──
     countries_sorted = sorted(
         countries_with_data,
         key=lambda c: stats_summary[c][metric]["mean"],
@@ -422,9 +495,9 @@ def _build_stats_spread(
 
 _EDA_CHART_META = {
     "correlation_heatmap": {
-        "title": "Indicator correlation matrix — latest values across countries",
+        "title": "Indicator correlation matrix — query-relevant metrics",
         "type":  "heatmap",
-        "desc":  "Pearson correlation between every pair of available indicators.",
+        "desc":  "Pearson correlation between query-relevant indicators (max 10 metrics).",
     },
     "growth_rate_bar": {
         "title": "CAGR comparison across countries",
@@ -449,14 +522,18 @@ def _metric_label(metric: str) -> str:
 
 
 def _build_dispatcher(eda_findings: dict, countries_data: dict):
-    growth_rates  = eda_findings.get("growth_rates", {})
-    anomalies     = eda_findings.get("anomalies", {})
-    stats_summary = eda_findings.get("stats_summary", {})
-    latest_matrix = eda_findings.get("latest_matrix", {})
+    growth_rates           = eda_findings.get("growth_rates", {})
+    anomalies              = eda_findings.get("anomalies", {})
+    stats_summary          = eda_findings.get("stats_summary", {})
+    latest_matrix          = eda_findings.get("latest_matrix", {})
+    active_metrics_ordered = eda_findings.get("active_metrics_ordered", [])
 
     def render(key: str) -> go.Figure | None:
         if key == "correlation_heatmap":
-            return _build_correlation_heatmap(latest_matrix)
+            return _build_correlation_heatmap(
+                latest_matrix,
+                active_metrics_ordered=active_metrics_ordered,
+            )
         if ":" not in key:
             return None
         base, metric = key.split(":", 1)
@@ -465,7 +542,7 @@ def _build_dispatcher(eda_findings: dict, countries_data: dict):
         if base == "anomaly_timeline":
             return _build_anomaly_timeline(countries_data, anomalies, metric)
         if base == "distribution_box":
-            return _build_stats_spread(stats_summary, metric)
+            return _build_stats_spread(stats_summary, metric, countries_data=countries_data)
         return None
 
     return render
@@ -488,14 +565,21 @@ def build_eda_chart_manifest(
 
     entries: list[dict[str, Any]] = []
 
-    # Correlation heatmap: needs ≥3 countries × ≥2 numeric metrics
+    # Correlation heatmap: needs ≥3 countries × ≥2 numeric metrics (after active-metric filter)
     if latest_matrix:
         df = pd.DataFrame(latest_matrix)
         numeric = df.select_dtypes(include=[float, int]).dropna(axis=1, how="all")
-        if numeric.shape[0] >= 3 and numeric.shape[1] >= 2 and len(numeric.dropna()) >= 3:
+        # Apply the same active_metrics filter that the chart builder uses
+        if active_metrics_ordered:
+            ordered_cols = [m for m in active_metrics_ordered if m in numeric.columns]
+            remaining = [c for c in numeric.columns if c not in ordered_cols]
+            ordered_cols = (ordered_cols + remaining)[:10]
+            numeric = numeric[[c for c in ordered_cols if c in numeric.columns]]
+        complete = numeric.dropna()
+        if numeric.shape[0] >= 3 and numeric.shape[1] >= 2 and len(complete) >= 3:
             entries.append({
                 "key":   "correlation_heatmap",
-                "title": _EDA_CHART_META["correlation_heatmap"]["title"],
+                "title": f"Indicator correlation matrix — {min(len(numeric.columns), 10)} metrics across countries",
                 "type":  _EDA_CHART_META["correlation_heatmap"]["type"],
                 "description": _EDA_CHART_META["correlation_heatmap"]["desc"],
                 "metric": None,
@@ -512,10 +596,27 @@ def build_eda_chart_manifest(
             if stats_summary.get(c, {}).get(metric, {}).get("n", 0) >= 2
         ]
         if len(countries_with_spread) >= 2:
+            # If all means are near zero the chart falls back to a boxplot;
+            # update the manifest title so the LLM gets an accurate description.
+            spread_means = [
+                stats_summary[c][metric]["mean"]
+                for c in countries_with_spread
+                if stats_summary[c].get(metric, {}).get("mean") is not None
+            ]
+            near_zero = (
+                len(spread_means) >= 2
+                and (max(spread_means) - min(spread_means)) < 0.01
+            )
+            chart_title = (
+                f"Distribution boxplot — {label} (year-by-year spread)"
+                if near_zero else
+                f"Distribution summary — {label} (mean ± 1σ)"
+            )
+            chart_type = "box" if near_zero else "bar"
             entries.append({
                 "key":   f"distribution_box:{metric}",
-                "title": f"Distribution summary — {label} (mean ± 1σ)",
-                "type":  "bar",
+                "title": chart_title,
+                "type":  chart_type,
                 "description": _EDA_CHART_META["distribution_box"]["desc"],
                 "metric": metric,
                 "applicable_countries": countries_with_spread,
@@ -590,23 +691,49 @@ def build_eda_charts(
     Heuristic fallback: build up to `max_charts` EDA charts from the manifest.
 
     Used only when the unified analysis LLM cannot select EDA chart keys.
-    Prefers the first N entries of the manifest, which is already sorted in
-    query-priority order by `build_eda_chart_manifest`.
+    Selection strategy (two passes to guarantee variety and no repeats):
+
+    Pass 1 — strict variety: pick at most 1 entry per base chart type
+             (correlation_heatmap, growth_rate_bar, anomaly_timeline,
+              distribution_box) in query-priority order.
+    Pass 2 — fill remaining slots with next-best entries, skipping any
+             metric already represented, so no metric appears twice.
     """
     manifest = build_eda_chart_manifest(eda_findings, countries_data)
     if not manifest:
         return []
 
-    # Prefer variety across chart types — dedupe by base key
-    seen_bases: set[str] = set()
     picked: list[str] = []
+    seen_bases: set[str] = set()   # chart type (e.g. "growth_rate_bar")
+    seen_metrics: set[str] = set() # metric name (e.g. "life_expectancy")
+
+    # Pass 1: one of each base type, in manifest order (query-priority)
     for entry in manifest:
-        base = entry["key"].split(":", 1)[0]
-        if base in seen_bases and len(picked) >= 2:
+        if len(picked) >= max_charts:
+            break
+        base   = entry["key"].split(":", 1)[0]
+        metric = entry.get("metric") or ""
+        if base in seen_bases:
+            continue
+        if metric and metric in seen_metrics:
             continue
         picked.append(entry["key"])
         seen_bases.add(base)
-        if len(picked) >= max_charts:
-            break
+        if metric:
+            seen_metrics.add(metric)
+
+    # Pass 2: fill remaining slots — any base allowed, but no metric repeat
+    if len(picked) < max_charts:
+        for entry in manifest:
+            if len(picked) >= max_charts:
+                break
+            if entry["key"] in picked:
+                continue
+            metric = entry.get("metric") or ""
+            if metric and metric in seen_metrics:
+                continue
+            picked.append(entry["key"])
+            if metric:
+                seen_metrics.add(metric)
 
     return render_eda_charts_by_keys(picked, eda_findings, countries_data)

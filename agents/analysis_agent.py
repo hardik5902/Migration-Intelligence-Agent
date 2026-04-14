@@ -101,16 +101,6 @@ def build_data_coverage_report(
                 if cols:
                     per_country["employment"] = cols
 
-        if "unhcr" in selected_tools:
-            disp = pd.DataFrame(dataset.get("displacement") or [])
-            if not disp.empty and "value" in disp.columns:
-                years = disp["year"].dropna().astype(int).tolist() if "year" in disp.columns else []
-                per_country["unhcr"] = [{
-                    "column": "displacement_outflow",
-                    "years":  _year_range(years),
-                    "n":      int(len(disp)),
-                }]
-
         if "acled" in selected_tools:
             conf = pd.DataFrame(dataset.get("conflict_events") or [])
             if not conf.empty:
@@ -244,19 +234,34 @@ You receive a user query plus four pieces of context:
   3. EDA CHART MANIFEST — available statistical charts (heatmap / CAGR bar / anomaly timeline / distribution box)
   4. EDA FINDINGS — pre-computed statistical findings + CAGR / anomalies / stats / correlations
 
-Your job is to return ONE JSON object containing THREE things at once:
+Your job is to return ONE JSON object containing THREE things at once.
 
-A. comparison_chart_keys — EXACTLY 4 keys from the comparison chart manifest.
+═══ HARD RULES (violating these makes the output invalid) ═══
+1. NO REPEATED METRICS across comparison_chart_keys AND eda_chart_keys.
+   If life_expectancy appears as an EDA chart, do NOT pick a comparison chart
+   about life_expectancy. The two sections must show DIFFERENT metrics.
+2. NO BLANK CHARTS. Only pick keys that appear in the manifest you were given.
+   If a key has 0 entries in countries_with_data, skip it.
+3. ONLY pick keys that are literally present in the manifests shown to you.
+   Do not invent keys.
+4. QUERY RELEVANCE. Every chart must directly address the user's query topic.
+   Do NOT pick GDP/inflation/political_stability for a healthcare query.
+   Do NOT pick health charts for an employment query.
+═══════════════════════════════════════════════════════════════
+
+A. comparison_chart_keys — UP TO 4 keys from the comparison chart manifest.
+   - Return fewer than 4 if fewer have relevant data (never pad with off-topic charts).
    - Relevance first: tags must match the query topic.
-   - Visual variety: at most 2 of the same type (line / bar / scatter / area).
-   - No duplicates backed by the same metric.
-   - Each key must have ≥2 entries in countries_with_data.
+   - Visual variety: at most 2 of the same chart type (line / bar / scatter / area).
+   - No two keys may back the same underlying metric.
+   - Each key must have ≥2 countries in countries_with_data.
 
 B. eda_chart_keys — UP TO 4 keys from the EDA chart manifest.
-   - Pick fewer than 4 if the data doesn't support more.
-   - Prefer statistical visuals relevant to the query topic.
-   - Do NOT pick more than one anomaly_timeline or distribution_box for the same metric.
-   - If the manifest is empty, return [].
+   - Pick fewer than 4 if the data doesn't support more — empty list is valid.
+   - Each EDA chart must cover a DIFFERENT metric from every comparison chart.
+   - Each EDA chart must cover a DIFFERENT metric from every other EDA chart.
+   - At most 1 anomaly_timeline, at most 1 distribution_box for any given metric.
+   - Prefer: statistical insights (heatmap, CAGR growth, anomaly detection).
 
 C. hypotheses — EXACTLY 3 HypothesisInsight objects. Rules:
    - Each claim MUST cite a specific number from EDA findings or raw coverage.
@@ -389,19 +394,41 @@ async def run_unified_analysis(
         if not isinstance(raw, dict):
             raise ValueError("LLM did not return a JSON object")
 
-        # Validate comparison keys against the manifest
-        valid_comp_keys = {m["key"] for m in comp_available}
-        comparison_keys = [
-            str(k) for k in (raw.get("comparison_chart_keys") or [])
-            if isinstance(k, str) and k in valid_comp_keys
-        ][:4]
+        # Validate comparison keys: must exist in manifest, unique keys, unique metrics
+        valid_comp_keys = {m["key"]: m for m in comp_available}
+        seen_comp_metrics: set[str] = set()
+        comparison_keys = []
+        for k in (raw.get("comparison_chart_keys") or []):
+            if not isinstance(k, str) or k not in valid_comp_keys:
+                continue
+            entry = valid_comp_keys[k]
+            # Extract underlying metric from data_key or key prefix
+            metric_id = entry.get("data_key") or k.rsplit("_", 1)[0]
+            if metric_id in seen_comp_metrics:
+                continue  # hard dedup: same metric already selected
+            seen_comp_metrics.add(metric_id)
+            comparison_keys.append(k)
+            if len(comparison_keys) >= 4:
+                break
 
-        # Validate EDA keys against the manifest
-        valid_eda_keys = {e["key"] for e in eda_chart_manifest}
-        eda_keys = [
-            str(k) for k in (raw.get("eda_chart_keys") or [])
-            if isinstance(k, str) and k in valid_eda_keys
-        ][:4]
+        # Validate EDA keys: must exist in manifest, no metric appearing in comp section
+        valid_eda_keys = {e["key"]: e for e in eda_chart_manifest}
+        seen_eda_metrics: set[str] = set()
+        eda_keys = []
+        for k in (raw.get("eda_chart_keys") or []):
+            if not isinstance(k, str) or k not in valid_eda_keys:
+                continue
+            entry = valid_eda_keys[k]
+            metric = entry.get("metric") or k.split(":", 1)[-1]
+            # Hard rule: no metric can appear in both EDA and comparison sections
+            if metric in seen_comp_metrics:
+                continue
+            if metric in seen_eda_metrics:
+                continue
+            seen_eda_metrics.add(metric)
+            eda_keys.append(k)
+            if len(eda_keys) >= 4:
+                break
 
         # Parse hypotheses
         raw_hyps = raw.get("hypotheses") or []

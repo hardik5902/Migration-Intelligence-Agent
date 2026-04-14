@@ -47,7 +47,6 @@ async def collect_data_for_countries(
                 "employment": [],
                 "aqi": [],
                 "climate": [],
-                "displacement": [],
                 "conflict_events": [],
                 "city_scores": [],
                 "news": [],

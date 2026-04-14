@@ -1,16 +1,21 @@
 """Country comparison pipeline — ADK-powered orchestrator.
 
-Wires the three ADK agents (ToolSelectorADKAgent, DataCollectorADKAgent,
-ChartEvidenceADKAgent) through ADK's Runner + InMemorySessionService.
+Wires the four ADK agents (ToolSelectorADKAgent, DataCollectorADKAgent,
+EDAAnalystADKAgent, UnifiedAnalysisADKAgent) through ADK's Runner +
+InMemorySessionService.
 
 Data flows through ADK session state:
-  user_query      → set before runner starts
-  selector_output ← ToolSelectorADKAgent
-  countries_data  ← DataCollectorADKAgent
-  eda_findings    ← EDAAnalystADKAgent
-  charts          ← ChartEvidenceADKAgent
-  hypotheses      ← ChartEvidenceADKAgent
-  tool_stats      ← ChartEvidenceADKAgent
+  user_query          → set before runner starts
+  selector_output     ← ToolSelectorADKAgent
+  countries_data      ← DataCollectorADKAgent
+  eda_findings        ← EDAAnalystADKAgent
+  data_coverage       ← EDAAnalystADKAgent
+  comparison_manifest ← EDAAnalystADKAgent
+  eda_chart_manifest  ← EDAAnalystADKAgent
+  charts              ← UnifiedAnalysisADKAgent
+  eda_charts          ← UnifiedAnalysisADKAgent
+  hypotheses          ← UnifiedAnalysisADKAgent
+  tool_stats          ← UnifiedAnalysisADKAgent
 
 SSE events are fired directly by each agent via the pipeline_emit contextvar,
 so the Flask SSE generator receives stage/selection/charts/evidence/done events

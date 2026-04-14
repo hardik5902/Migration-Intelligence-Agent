@@ -400,7 +400,7 @@ body {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 18px;
   margin-top: 4px;
 }
@@ -788,6 +788,46 @@ body {
 
 .proxy-note strong {
   color: #4c56b8;
+}
+
+/* ── Coverage warnings ────────────────────────────────────────────────────── */
+.coverage-warnings {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(200, 130, 30, 0.07);
+  border: 1px solid rgba(200, 130, 30, 0.22);
+}
+
+.coverage-intro {
+  font-size: 12px;
+  color: #7a5a1a;
+  margin: 0 0 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.coverage-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.chip-warn {
+  background: rgba(200, 130, 30, 0.12);
+  color: #7a5a1a;
+  border: 1px solid rgba(200, 130, 30, 0.3);
+  font-size: 12px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  cursor: default;
+}
+
+.chip-warn-detail {
+  color: #a07030;
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.85;
 }
 
 /* ── Utility ──────────────────────────────────────────────────────────────── */

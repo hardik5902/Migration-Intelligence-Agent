@@ -6,7 +6,7 @@ the actual query topic:
   - economic query         → GDP, inflation, income growth
   - labour query           → unemployment, youth unemployment
   - environment query      → temperature anomaly, precipitation
-  - displacement query     → UNHCR outflow trends
+
 
 Statistical methods used (all distinct from the comparison line/bar charts below):
   1. run_growth_rate       → CAGR + peak/trough year per series
@@ -61,14 +61,6 @@ def _clim_series(dataset: dict, col: str) -> tuple[list[float], list[int]]:
     if sub.empty:
         return [], []
     return sub[col].astype(float).tolist(), sub["year"].astype(int).tolist()
-
-
-def _disp_series(dataset: dict) -> tuple[list[float], list[int]]:
-    disp = pd.DataFrame(dataset.get("displacement") or [])
-    if disp.empty or "value" not in disp.columns or "year" not in disp.columns:
-        return [], []
-    yearly = disp.groupby("year")["value"].sum().sort_index()
-    return yearly.values.astype(float).tolist(), yearly.index.astype(int).tolist()
 
 
 def _teleport_series(dataset: dict) -> tuple[list[float], list[int]]:
@@ -135,8 +127,6 @@ _ALL_METRICS: dict[str, tuple[Any, str]] = {
     "control_of_corruption":   (lambda d: _wb_series(d, "control_of_corruption"),           "Control of corruption index"),
     "rule_of_law":             (lambda d: _wb_series(d, "rule_of_law"),                     "Rule of law index"),
     "homicide_rate":           (lambda d: _wb_series(d, "homicide_rate"),                   "Homicide rate (per 100k)"),
-    # ── Displacement ──────────────────────────────────────────────────────────
-    "displacement":            (_disp_series,                                               "Displacement outflow"),
     # ── Labour ────────────────────────────────────────────────────────────────
     "unemployment":            (lambda d: _emp_series(d, "unemployment_rate"),              "Unemployment rate (%)"),
     "youth_unemployment":      (lambda d: _emp_series(d, "youth_unemployment_rate"),        "Youth unemployment (%)"),
@@ -175,7 +165,6 @@ _ALL_METRICS: dict[str, tuple[Any, str]] = {
 # Which metrics to activate per tool, in priority order within that tool
 _TOOL_METRICS: dict[str, list[str]] = {
     "acled":       ["conflict_events", "fatalities"],
-    "unhcr":       ["displacement"],
     "worldbank":   [
         # Governance
         "political_stability", "control_of_corruption", "rule_of_law", "homicide_rate",
@@ -201,7 +190,6 @@ _TOOL_METRICS: dict[str, list[str]] = {
 # Primary metric to use as correlation anchor per tool
 _TOOL_ANCHOR: dict[str, str] = {
     "acled":       "conflict_events",
-    "unhcr":       "displacement",
     "environment": "temp_anomaly",
     "employment":  "unemployment",
     "worldbank":   "political_stability",
@@ -213,8 +201,6 @@ _METRIC_VOLATILITY_IMPLICATIONS: dict[str, str] = {
     # Conflict / safety
     "conflict_events":           "unpredictable security — conflict levels can spike suddenly",
     "fatalities":                "highly unstable conflict intensity — fatalities vary dramatically year to year",
-    # Displacement
-    "displacement":              "unstable migration pressure — outflows fluctuate significantly",
     # Governance
     "political_stability":       "unstable governance — political conditions shift frequently",
     "control_of_corruption":     "inconsistent anti-corruption enforcement — business and legal environments are hard to predict",
@@ -282,7 +268,6 @@ _METRIC_HIGHER_IS_BETTER: dict[str, bool] = {
     "poverty_headcount":          False,
     "conflict_events":            False,
     "fatalities":                 False,
-    "displacement":               False,
     "co2_per_capita":             False,
     "gini":                       False,
     "unemployment":               False,
@@ -469,37 +454,6 @@ def _finding_stability_ranking(stats_summary: dict) -> dict | None:
             f"{worst} scores {means[worst]:.2f}, indicating higher perceived risk of "
             f"instability and political violence. "
             f"This index directly reflects a country's safety and predictability for migrants."
-        ),
-    }
-
-
-def _finding_displacement_trend(growth_rates: dict) -> dict | None:
-    """Country with fastest-growing displacement outflow."""
-    cagrs = {
-        c: growth_rates[c]["displacement"]["cagr"]
-        for c in growth_rates
-        if growth_rates[c].get("displacement", {}).get("cagr") is not None
-    }
-    if len(cagrs) < 2:
-        return None
-    highest = max(cagrs, key=lambda c: cagrs[c])
-    lowest  = min(cagrs, key=lambda c: cagrs[c])
-    hv, lv  = cagrs[highest], cagrs[lowest]
-    trend_note = (
-        f"{lowest}'s outflow is shrinking ({lv * 100:+.1f}% CAGR), "
-        f"suggesting stabilising conditions there."
-        if lv < 0 else
-        f"{lowest} shows the most contained outflow growth ({lv * 100:+.1f}% CAGR)."
-    )
-    return {
-        "type":   "growth",
-        "title":  f"{highest} has fastest-rising displacement outflow",
-        "value":  f"CAGR {hv * 100:+.1f}% per year",
-        "detail": (
-            f"{highest}'s displacement outflow is growing {hv * 100:+.1f}% per year — "
-            f"the fastest among compared countries. Rising displacement is a strong "
-            f"push-factor signal indicating worsening conditions. "
-            f"{trend_note}"
         ),
     }
 
