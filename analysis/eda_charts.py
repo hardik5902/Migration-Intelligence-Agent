@@ -427,16 +427,47 @@ def build_eda_charts(
     """
     Build up to 2 EDA-specific charts driven by eda_findings["charts_hint"].
 
-    Chart types are chosen to be visually distinct from the comparison charts
-    (which are plain line / bar charts per country over time).
+    Metric selection is driven by "active_metrics_ordered" — the query-priority
+    list written by run_eda() — so charts always show what the user asked about,
+    not a hardcoded fallback to GDP or conflict metrics.
 
     Returns a list of Plotly JSON strings.
     """
-    growth_rates  = eda_findings.get("growth_rates", {})
-    anomalies     = eda_findings.get("anomalies", {})
-    stats_summary = eda_findings.get("stats_summary", {})
-    latest_matrix = eda_findings.get("latest_matrix", {})
-    charts_hint   = eda_findings.get("charts_hint", [])
+    growth_rates           = eda_findings.get("growth_rates", {})
+    anomalies              = eda_findings.get("anomalies", {})
+    stats_summary          = eda_findings.get("stats_summary", {})
+    latest_matrix          = eda_findings.get("latest_matrix", {})
+    charts_hint            = eda_findings.get("charts_hint", [])
+    active_metrics_ordered = eda_findings.get("active_metrics_ordered", [])
+
+    # ── Query-aware metric pickers ──────────────────────────────────────────────
+
+    def _best_cagr_metric() -> str:
+        """First metric in query-priority order that has CAGR data."""
+        for m in active_metrics_ordered:
+            if any(growth_rates.get(c, {}).get(m, {}).get("cagr") is not None for c in growth_rates):
+                return m
+        return "gdp_per_capita"
+
+    def _best_spread_metric() -> str:
+        """First metric in query-priority order that has ≥2 countries with stats."""
+        for m in active_metrics_ordered:
+            if sum(1 for c in stats_summary if stats_summary[c].get(m, {}).get("n", 0) >= 2) >= 2:
+                return m
+        return "gdp_growth"
+
+    def _best_anomaly_metric() -> str:
+        """First metric in query-priority order that has detected anomalies."""
+        for m in active_metrics_ordered:
+            if any(any(a["metric"] == m for a in lst) for lst in anomalies.values() if lst):
+                return m
+        # Fall back to any metric with an anomaly
+        for lst in anomalies.values():
+            if lst:
+                return lst[0]["metric"]
+        return active_metrics_ordered[0] if active_metrics_ordered else "gdp_growth"
+
+    # ── Chart dispatcher ────────────────────────────────────────────────────────
 
     charts: list[go.Figure] = []
     attempted: set[str] = set()
@@ -445,38 +476,11 @@ def build_eda_charts(
         if hint == "correlation_heatmap":
             return _build_correlation_heatmap(latest_matrix)
         if hint == "growth_rate_bar":
-            # Priority: conflict/displacement level series first, then economic
-            best = next(
-                (m for m in [
-                    "displacement", "conflict_events", "fatalities",
-                    "gdp_per_capita", "unemployment", "temp_anomaly", "gdp_growth",
-                ]
-                 if any(
-                     growth_rates.get(c, {}).get(m, {}).get("cagr") is not None
-                     for c in growth_rates
-                 )),
-                "gdp_per_capita",
-            )
-            return _build_cagr_bar(growth_rates, best)
+            return _build_cagr_bar(growth_rates, _best_cagr_metric())
         if hint == "anomaly_timeline":
-            # Pick anomaly in the most relevant metric (first one found)
-            anomaly_metric = next(
-                (anom_list[0]["metric"]
-                 for anom_list in anomalies.values() if anom_list),
-                "gdp_growth",
-            )
-            return _build_anomaly_timeline(countries_data, anomalies, anomaly_metric)
+            return _build_anomaly_timeline(countries_data, anomalies, _best_anomaly_metric())
         if hint == "distribution_box":
-            # Priority: conflict/safety metrics first, then economic
-            best = next(
-                (m for m in [
-                    "conflict_events", "fatalities", "political_stability",
-                    "displacement", "unemployment", "gdp_growth", "inflation", "temp_anomaly",
-                ]
-                 if sum(1 for c in stats_summary if stats_summary[c].get(m, {}).get("n", 0) >= 2) >= 2),
-                "gdp_growth",
-            )
-            return _build_stats_spread(stats_summary, best)
+            return _build_stats_spread(stats_summary, _best_spread_metric())
         return None
 
     for hint in charts_hint:
@@ -489,7 +493,7 @@ def build_eda_charts(
         if fig is not None:
             charts.append(fig)
 
-    # Fallback: prefer statistical charts (distribution/heatmap) over time-series
+    # Fallback: prefer statistical charts over time-series
     if not charts:
         for fallback in ["distribution_box", "correlation_heatmap", "anomaly_timeline", "growth_rate_bar"]:
             if fallback not in attempted:

@@ -8,8 +8,17 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from models.schemas import Citation, IntentConfig, MigrationDataset, ToolCall, ToolSelection
-from tools import aqi_tools, climate_tools, employment_tools, environment_tools, news_tools, teleport_tools, worldbank_tools
-from tools import acled_tools
+from tools import (
+    acled_tools,
+    aqi_tools,
+    climate_tools,
+    employment_tools,
+    environment_tools,
+    news_tools,
+    teleport_tools,
+    unhcr_tools,
+    worldbank_tools,
+)
 from tools.country_codes import country_name_to_iso3, iso3_to_iso2, iso3_to_name
 from tools.duckdb_tools import cache_key, replace_table_rows, run_sql_query, should_use_cache
 from agents.progress_tracker import get_tracker
@@ -22,15 +31,16 @@ async def collect_migration_dataset(
     """Fetch (or load TTL cache) selected sources based on tool_selection."""
     # Parse tool selection (default: all on)
     tools = {
-        "worldbank": True,
-        "employment": True,
+        "worldbank":   True,
+        "employment":  True,
         "environment": True,
-        "acled": True,
-        "news": True,
-        # legacy keys kept for backward-compat with old tool_selection dicts
+        "acled":       True,
+        "unhcr":       False,
+        "teleport":    True,   # always on — free World Bank composite scores
+        "news":        True,
+        # legacy aliases
         "climate": False,
-        "aqi": False,
-        "teleport": False,
+        "aqi":     False,
     }
     if tool_selection:
         tools.update(tool_selection)
@@ -398,6 +408,50 @@ async def collect_migration_dataset(
                     )
                 )
 
+        async def unhcr_f():
+            started = datetime.now(timezone.utc).isoformat()
+            try:
+                if should_use_cache("displacement_data", ck):
+                    rows = run_sql_query(
+                        f"SELECT * FROM displacement_data WHERE cache_key = '{ck}'"
+                    )
+                    from_cache = True
+                else:
+                    rows, endpoint_url = await unhcr_tools.get_displacement_data(
+                        code, y0, y1, client
+                    )
+                    from_cache = False
+                    replace_table_rows(
+                        "displacement_data",
+                        ck,
+                        rows,
+                        ["country", "year", "metric", "value", "coa", "coa_name",
+                         "endpoint_url", "fetched_at"],
+                    )
+                if rows:
+                    fresh["UNHCR"] = str(rows[0].get("fetched_at", ""))
+                return rows
+            finally:
+                finished = datetime.now(timezone.utc).isoformat()
+                tool_calls.append(
+                    ToolCall(
+                        tool_name="unhcr.get_displacement_data",
+                        params={"country_code": code, "year_from": str(y0),
+                                "year_to": str(y1)},
+                        from_cache=locals().get("from_cache", False),
+                        started_at=started,
+                        finished_at=finished,
+                        rows_returned=(
+                            len(rows) if "rows" in locals() and rows else 0
+                        ),
+                        endpoint_url=(
+                            rows[0].get("endpoint_url")
+                            if "rows" in locals() and rows else None
+                        ),
+                        source_api="UNHCR API",
+                    )
+                )
+
         # Build task dict: only execute enabled tools
         tracker = get_tracker()
         tasks_dict = {}
@@ -457,6 +511,9 @@ async def collect_migration_dataset(
         if tools["acled"]:
             tracker.log_tool_call("ACLED", {"country_code": code, "date_range": f"{y0}-{y1}"})
             tasks_dict["conf"] = conf()
+        if tools.get("unhcr"):
+            tracker.log_tool_call("UNHCR", {"country_code": code, "years": f"{y0}-{y1}"})
+            tasks_dict["unhcr_f"] = unhcr_f()
         # GDELT: run in parallel with other tools when news is enabled
         if tools["news"]:
             async def gdelt_t():
@@ -489,10 +546,11 @@ async def collect_migration_dataset(
         results = {name: bundled[i] for i, name in enumerate(task_names)}
 
         world_rows, _wb_urls = _unwrap_pair(results.get("eco")) if "eco" in results else ([], [])
-        city_rows = _unwrap_list(results.get("city")) if "city" in results else []
-        news_rows = _unwrap_list(results.get("news_c")) if "news_c" in results else []
-        emp_rows = _unwrap_list(results.get("emp")) if "emp" in results else []
-        conflict_rows = _unwrap_list(results.get("conf")) if "conf" in results else []
+        city_rows    = _unwrap_list(results.get("city"))    if "city"    in results else []
+        news_rows    = _unwrap_list(results.get("news_c"))  if "news_c"  in results else []
+        emp_rows     = _unwrap_list(results.get("emp"))     if "emp"     in results else []
+        conflict_rows = _unwrap_list(results.get("conf"))   if "conf"    in results else []
+        disp_rows    = _unwrap_list(results.get("unhcr_f")) if "unhcr_f" in results else []
         gd = _unwrap_dict(results.get("gdelt_t")) if "gdelt_t" in results else {}
 
         # Environment tool returns (climate_rows, aqi_rows)
@@ -601,7 +659,7 @@ async def collect_migration_dataset(
         year_from=y0,
         year_to=y1,
         intent=intent.intent,
-        displacement=[],
+        displacement=disp_rows,
         destinations=destinations,
         worldbank=world_rows,
         conflict_events=conflict_rows,
@@ -620,15 +678,16 @@ async def collect_migration_dataset(
     
     # Debug output
     print(f"\n[SCOUT] Data Collection Complete for {name} ({code}):")
-    print(f"  World Bank: {len(world_rows)} rows")
-    print(f"  Conflict Events: {len(conflict_rows)} rows")
-    print(f"  Climate: {len(climate_rows)} rows")
-    print(f"  AQI: {len(aqi_rows)} rows")
-    print(f"  News: {len(news_rows)} rows")
-    print(f"  Employment: {len(emp_rows)} rows")
-    print(f"  City Scores: {len(city_rows)} rows")
-    print(f"  Tool calls logged: {len(tool_calls)}")
-    print(f"  Missing data: {missing_reasons or 'none'}")
+    print(f"  World Bank:     {len(world_rows)} rows")
+    print(f"  Conflict:       {len(conflict_rows)} rows")
+    print(f"  UNHCR:          {len(disp_rows)} rows")
+    print(f"  Climate:        {len(climate_rows)} rows")
+    print(f"  AQI:            {len(aqi_rows)} rows")
+    print(f"  News:           {len(news_rows)} rows")
+    print(f"  Employment:     {len(emp_rows)} rows")
+    print(f"  City Scores:    {len(city_rows)} rows")
+    print(f"  Tool calls:     {len(tool_calls)}")
+    print(f"  Missing:        {missing_reasons or 'none'}")
     print()
     
     return ds

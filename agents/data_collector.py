@@ -23,7 +23,9 @@ async def collect_data_for_countries(
 
     Returns a dict mapping country name → dataset dict (from MigrationDataset.model_dump()).
     """
+    # Build per-tool flags: selected tools enabled; teleport always on (free WB proxy).
     tool_flags = {t: (t in selected_tools) for t in AVAILABLE_TOOLS}
+    tool_flags["teleport"] = True  # always collect quality-of-life composite scores
 
     async def fetch_one(country: str, code: str) -> tuple[str, Any]:
         intent = IntentConfig(

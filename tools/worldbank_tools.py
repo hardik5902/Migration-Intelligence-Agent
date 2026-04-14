@@ -129,18 +129,43 @@ async def fetch_macro_bundle(
     year_to: int,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Full World Bank bundle: economic, labour, health, education, poverty — all in parallel."""
+    """Full World Bank bundle — 25 indicators across economy, labour, health, governance,
+    gender, infrastructure, environment, and quality of life.  All fetched in parallel."""
     indicators = {
-        "NY.GDP.MKTP.KD.ZG": "gdp_growth",
-        "FP.CPI.TOTL.ZG": "inflation",
-        "PV.EST": "political_stability",
-        "SL.UEM.TOTL.ZS": "unemployment",
-        "SI.POV.GINI": "gini",
-        "NY.GDP.PCAP.CD": "gdp_per_capita_usd",
-        "SH.XPD.CHEX.GD.ZS": "health_expenditure_gdp",
-        "SH.MED.PHYS.ZS": "physicians_per_1000",
-        "SE.XPD.TOTL.GD.ZS": "education_spend_gdp",
-        "SI.POV.NAHC": "poverty_headcount",
+        # ── Economy ────────────────────────────────────────────────────────────
+        "NY.GDP.MKTP.KD.ZG":    "gdp_growth",
+        "NY.GDP.PCAP.CD":       "gdp_per_capita_usd",
+        "NY.GNP.PCAP.PP.CD":    "gni_per_capita_ppp",      # purchasing-power-parity wealth
+        "FP.CPI.TOTL.ZG":       "inflation",
+        "SI.POV.GINI":          "gini",
+        "SI.POV.NAHC":          "poverty_headcount",
+        # ── Labour ─────────────────────────────────────────────────────────────
+        "SL.UEM.TOTL.ZS":       "unemployment",
+        "SL.TLF.CACT.FE.ZS":   "female_labor_participation",  # women's economic inclusion
+        # ── Health ─────────────────────────────────────────────────────────────
+        "SH.XPD.CHEX.GD.ZS":   "health_expenditure_gdp",
+        "SH.MED.PHYS.ZS":       "physicians_per_1000",
+        "SP.DYN.LE00.IN":       "life_expectancy",
+        "SP.DYN.IMRT.IN":       "infant_mortality",
+        # ── Sanitation & Water (waste, sewage, water quality) ──────────────────
+        "SH.STA.SMSS.ZS":       "sanitation_access",        # basic sanitation services (%)
+        "SH.H2O.SMDW.ZS":       "clean_water_access",       # safely managed drinking water (%)
+        # ── Education ──────────────────────────────────────────────────────────
+        "SE.XPD.TOTL.GD.ZS":   "education_spend_gdp",
+        # ── Governance & Safety ────────────────────────────────────────────────
+        "PV.EST":               "political_stability",
+        "CC.EST":               "control_of_corruption",
+        "RL.EST":               "rule_of_law",
+        "VC.IHR.PSRC.P5":       "homicide_rate",            # intentional homicides per 100k
+        # ── Gender ─────────────────────────────────────────────────────────────
+        "SG.GEN.PARL.ZS":       "women_in_parliament",
+        "SP.ADO.TFRT":          "adolescent_fertility_rate", # gender development proxy
+        # ── Infrastructure & Connectivity ──────────────────────────────────────
+        "EG.ELC.ACCS.ZS":       "electricity_access",
+        "IT.NET.USER.ZS":       "internet_users_pct",
+        "SP.URB.TOTL.IN.ZS":    "urban_population_pct",
+        # ── Environment ────────────────────────────────────────────────────────
+        "EN.ATM.CO2E.PC":       "co2_per_capita",           # CO2 emissions (metric tons/person)
     }
     own = client is None
     c = client or httpx.AsyncClient(timeout=20.0)

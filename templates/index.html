@@ -139,6 +139,20 @@
         </div>
       </section>
 
+      <!-- ── Out-of-scope panel ─────────────────────────────────────────────── -->
+      <section id="oos-panel" class="oos-panel hidden">
+        <div class="oos-icon">🔍</div>
+        <div class="oos-body">
+          <h3 class="oos-title">Outside our analysis scope</h3>
+          <p class="oos-reason" id="oos-reason"></p>
+          <p class="oos-hint">
+            Try questions about countries, migration, safety, healthcare, education,
+            cost of living, environment, or quality of life.
+            <br>For example: <em>"Which 5 countries have the best sanitation infrastructure?"</em>
+          </p>
+        </div>
+      </section>
+
       <!-- ── Results shell (populated progressively by JS) ─────────────────── -->
       <section id="results-shell" class="results-shell hidden">
 
@@ -191,13 +205,17 @@
           <div class="charts-grid" id="charts-grid"></div>
         </section>
 
-        <!-- 3 Evidence insights -->
-        <section id="evidence-panel" class="evidence-section hidden">
+        <!-- Hypothesis Report (populated on "evidence" SSE event) -->
+        <section id="evidence-panel" class="hypothesis-section hidden">
           <div class="section-heading">
-            <p class="eyebrow">Key Findings</p>
-            <h2>3 evidence-backed insights</h2>
+            <p class="eyebrow">Hypothesis Report</p>
+            <h2>What the data says — grounded analysis with evidence</h2>
+            <p class="section-desc">
+              Each hypothesis is derived from EDA findings and raw data, not model weights.
+              Specific data points are cited, and each is tested against a competing explanation.
+            </p>
           </div>
-          <div class="evidence-grid" id="evidence-grid"></div>
+          <div class="hypothesis-list" id="evidence-grid"></div>
         </section>
 
       </section><!-- /#results-shell -->
@@ -245,6 +263,8 @@
       function resetUI() {
         hide(errorBox);
         hide(resShell);
+        const oosPanel = $('oos-panel');
+        if (oosPanel) hide(oosPanel);
         // Reset all panels inside results-shell
         ['result-header-panel','tool-status-panel','eda-panel',
          'eda-charts-wrap','charts-panel','evidence-panel']
@@ -301,8 +321,29 @@
           show(qf);
         }
 
+        // Proxy note — shown below query focus when niche topic uses proxy indicators
+        if (d.proxy_note && d.proxy_note.trim()) {
+          const existing = $('proxy-note-box');
+          const box = existing || document.createElement('p');
+          if (!existing) {
+            box.id = 'proxy-note-box';
+            box.className = 'proxy-note';
+            $('result-header-panel').appendChild(box);
+          }
+          box.innerHTML = '<strong>Proxy analysis:</strong> ' + d.proxy_note;
+          box.classList.remove('hidden');
+        }
+
         show($('result-header-panel'));
         show(resShell);
+      }
+
+      function onOutOfScope(d) {
+        $('oos-reason').textContent = d.reason || 'This query is outside our analysis scope.';
+        show($('oos-panel'));
+        hide(loadPanel);
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run Analysis';
       }
 
       // ── EDA type → icon + colour class ────────────────────────────────────────
@@ -379,7 +420,7 @@
       }
 
       function onEvidence(d) {
-        // Tool status badges
+        // ── Tool status badges ─────────────────────────────────────────────
         const tsGrid = $('tool-status-grid');
         tsGrid.innerHTML = '';
         (d.tools_used || []).forEach(tool => {
@@ -391,38 +432,65 @@
             <span class="ts-badge">${rows > 0 ? `✓ ${rows} rows` : '⚠ no data'}</span>`;
           tsGrid.appendChild(item);
         });
-        if (d.tools_used && d.tools_used.length) {
-          show($('tool-status-panel'));
-        }
+        if (d.tools_used && d.tools_used.length) show($('tool-status-panel'));
 
-        // Evidence cards
-        const evGrid = $('evidence-grid');
-        evGrid.innerHTML = '';
-        (d.evidences || []).forEach((ev, i) => {
-          const conf = ev.confidence ?? 50;
+        // ── Hypothesis cards ───────────────────────────────────────────────
+        const list = $('evidence-grid');
+        list.innerHTML = '';
+        const items = d.hypotheses || d.evidences || [];
+        items.forEach((h, i) => {
+          const conf      = h.confidence ?? 50;
           const confClass = conf >= 80 ? 'conf-high' : conf >= 60 ? 'conf-med' : 'conf-low';
           const confLabel = conf >= 80 ? 'High' : conf >= 60 ? 'Medium' : 'Low';
+
+          const hasCompeting = h.competing_hypothesis && h.competing_hypothesis.trim();
+
           const article = document.createElement('article');
-          article.className = 'evidence-card';
+          article.className = 'hyp-card';
           article.innerHTML = `
-            <div class="evidence-num">${i + 1}</div>
-            <div class="evidence-body">
-              <h3>${ev.title || ''}</h3>
-              <p class="evidence-value">${ev.value || ''}</p>
-              <p class="evidence-desc">${ev.description || ''}</p>
-              <div class="evidence-footer">
-                <span class="evidence-source">${ev.data_source || ''}</span>
-                <span class="conf-badge ${confClass}">
-                  <span class="conf-bar-wrap"><span class="conf-bar" style="width:${conf}%"></span></span>
-                  ${conf}% · ${confLabel} confidence
-                </span>
+            <div class="hyp-header">
+              <span class="hyp-num">${i + 1}</span>
+              <div class="hyp-header-right">
+                <h3 class="hyp-headline">${h.headline || h.title || ''}</h3>
+                <div class="hyp-meta-row">
+                  <span class="hyp-source-badge">${h.data_source || ''}</span>
+                  <span class="conf-badge ${confClass}">
+                    <span class="conf-bar-wrap"><span class="conf-bar" style="width:${conf}%"></span></span>
+                    ${conf}% · ${confLabel}
+                  </span>
+                </div>
               </div>
-            </div>`;
-          evGrid.appendChild(article);
+            </div>
+
+            <div class="hyp-metric-box">
+              <span class="hyp-metric-label">Key finding</span>
+              <strong class="hyp-metric-value">${h.key_metric || h.value || ''}</strong>
+            </div>
+
+            ${h.summary ? `<p class="hyp-summary">${h.summary}</p>` : ''}
+
+            <div class="hyp-evidence-grid">
+              <div class="hyp-evidence-col hyp-for">
+                <p class="hyp-col-label">✓ Supporting</p>
+                <div class="ev-chips">${(h.evidence_for || []).map(e => `<span class="ev-chip ev-chip-for">${e}</span>`).join('')}</div>
+              </div>
+              <div class="hyp-evidence-col hyp-against">
+                <p class="hyp-col-label">✗ Caveats</p>
+                <div class="ev-chips">${(h.evidence_against || []).map(e => `<span class="ev-chip ev-chip-against">${e}</span>`).join('')}</div>
+              </div>
+            </div>
+
+            ${hasCompeting ? `
+            <div class="hyp-competing-row">
+              <span class="hyp-competing-label">Alt:</span>
+              <span class="hyp-competing-text">${h.competing_hypothesis}</span>
+              ${h.competing_verdict ? `<span class="hyp-verdict-sep">→</span><span class="hyp-verdict-text">${h.competing_verdict}</span>` : ''}
+            </div>` : ''}`;
+
+          list.appendChild(article);
         });
-        if (d.evidences && d.evidences.length) {
-          show($('evidence-panel'));
-        }
+
+        if (items.length) show($('evidence-panel'));
       }
 
       function onDone() {
@@ -484,12 +552,13 @@
             try { data = JSON.parse(dataStr); } catch (_) {}
 
             switch (eventName) {
-              case 'stage':     onStage(data);     break;
-              case 'selection': onSelection(data); break;
-              case 'eda':       onEda(data);        break;
-              case 'charts':    onCharts(data);    break;
-              case 'evidence':  onEvidence(data);  break;
-              case 'done':      onDone();           break;
+              case 'stage':        onStage(data);        break;
+              case 'selection':    onSelection(data);    break;
+              case 'eda':          onEda(data);          break;
+              case 'charts':       onCharts(data);       break;
+              case 'evidence':     onEvidence(data);     break;
+              case 'out_of_scope': onOutOfScope(data);   break;
+              case 'done':         onDone();             break;
               case 'error':
                 showError(data.message || 'An unexpected error occurred.');
                 break;

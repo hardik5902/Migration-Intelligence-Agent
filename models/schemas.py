@@ -220,6 +220,10 @@ class ToolSelectorOutput(BaseModel):
     year_from: int = 2015
     year_to: int = 2023
     reasoning: str = ""
+    proxy_note: str = ""        # set when niche topic uses proxy indicators
+    in_scope: bool = True       # False = query has no country/migration relevance
+    out_of_scope_reason: str = ""  # human-readable explanation when in_scope=False
+    worldbank_indicators: list[str] = Field(default_factory=list)  # specific WB indicators for this query
 
 
 class Evidence(BaseModel):
@@ -233,6 +237,29 @@ class Evidence(BaseModel):
     confidence: int = 50  # 0-100; assigned by LLM based on data completeness & recency
 
 
+class HypothesisInsight(BaseModel):
+    """A structured hypothesis grounded in EDA data with competing explanations."""
+    model_config = ConfigDict(extra="ignore")
+
+    headline: str = ""
+    # 2-3 sentence summary with specific numbers
+    summary: str = ""
+    # The single anchoring data point (e.g. "GDP growth 1.8%, 2022")
+    key_metric: str = ""
+    # Explicit chain of reasoning from data → conclusion
+    reasoning: str = ""
+    # List of specific data points supporting the hypothesis (with values + years)
+    evidence_for: list[str] = Field(default_factory=list)
+    # Data points that complicate or challenge the hypothesis
+    evidence_against: list[str] = Field(default_factory=list)
+    # Alternative explanation the data could support
+    competing_hypothesis: str = ""
+    # Why the primary hypothesis is more supported than the alternative
+    competing_verdict: str = ""
+    data_source: str = ""
+    confidence: int = 50
+
+
 class CountryComparisonResult(BaseModel):
     """Final result of the country comparison pipeline."""
     model_config = ConfigDict(extra="ignore")
@@ -241,7 +268,7 @@ class CountryComparisonResult(BaseModel):
     countries: list[str] = Field(default_factory=list)
     country_codes: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
-    evidences: list[Evidence] = Field(default_factory=list)
+    hypotheses: list[HypothesisInsight] = Field(default_factory=list)
     summary: str = ""
     chart_jsons: list[str] = Field(default_factory=list)
     query_focus: str = ""

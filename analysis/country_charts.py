@@ -194,6 +194,83 @@ def _scalar_teleport(dataset: dict) -> float | None:
     return float(v) if pd.notna(v) else None
 
 
+def _scalar_life_expectancy(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "life_expectancy")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_infant_mortality(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "infant_mortality")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_sanitation_access(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "sanitation_access")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_clean_water_access(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "clean_water_access")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_electricity_access(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "electricity_access")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_internet_users(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "internet_users_pct")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_homicide_rate(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "homicide_rate")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_women_parliament(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "women_in_parliament")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_rule_of_law(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "rule_of_law")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_co2_per_capita(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "co2_per_capita")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
+def _scalar_gni_per_capita(dataset: dict) -> float | None:
+    series = _wb_series(dataset, "gni_per_capita_ppp")
+    if series is None or series.empty:
+        return None
+    return float(series.sort_values("year").iloc[-1]["value"])
+
+
 def _scalar_health_expenditure(dataset: dict) -> float | None:
     series = _wb_series(dataset, "health_expenditure_gdp")
     if series is None or series.empty:
@@ -593,6 +670,185 @@ def _metric_registry(countries_data: dict) -> list[dict]:
             "yaxis_title": "GDP Growth (%)",
             "source": "World Bank",
         },
+        # ── Life expectancy (line + bar) ──────────────────────────────────────
+        {
+            "type": "line",
+            "data_key": "life_expectancy",
+            "extractor": lambda d: _wb_series(d, "life_expectancy"),
+            "title": "Life Expectancy at Birth (years)",
+            "yaxis_title": "Years",
+            "source": "World Bank",
+        },
+        {
+            "type": "bar",
+            "data_key": "life_expectancy_bar",
+            "extractor": _scalar_life_expectancy,
+            "title": "Life Expectancy — Latest Snapshot (years)",
+            "yaxis_title": "Years",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Infant mortality (bar) ─────────────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "infant_mortality",
+            "extractor": _scalar_infant_mortality,
+            "title": "Infant Mortality Rate (per 1,000 live births) — lower is better",
+            "yaxis_title": "Deaths per 1,000",
+            "source": "World Bank",
+            "ascending": True,
+        },
+        # ── Scatter: life expectancy vs health expenditure ────────────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_health_expenditure,
+            "y_extractor": _scalar_life_expectancy,
+            "title": "Health Investment vs Outcomes: Spending vs Life Expectancy",
+            "xaxis_title": "Health Expenditure (% GDP)",
+            "yaxis_title": "Life Expectancy (years)",
+            "source": "World Bank",
+        },
+        # ── Sanitation & clean water (bar) ─────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "sanitation_access",
+            "extractor": _scalar_sanitation_access,
+            "title": "Sanitation Access (% of population)",
+            "yaxis_title": "% population",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        {
+            "type": "bar",
+            "data_key": "clean_water_access",
+            "extractor": _scalar_clean_water_access,
+            "title": "Clean Water Access (% of population)",
+            "yaxis_title": "% population",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Scatter: sanitation vs clean water (infrastructure comparison) ────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_sanitation_access,
+            "y_extractor": _scalar_clean_water_access,
+            "title": "Infrastructure Gap: Sanitation vs Clean Water Access",
+            "xaxis_title": "Sanitation Access (%)",
+            "yaxis_title": "Clean Water Access (%)",
+            "source": "World Bank",
+        },
+        # ── Electricity & internet access ────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "electricity_access",
+            "extractor": _scalar_electricity_access,
+            "title": "Electricity Access (% of population)",
+            "yaxis_title": "% population",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        {
+            "type": "line",
+            "data_key": "internet_users",
+            "extractor": lambda d: _wb_series(d, "internet_users_pct"),
+            "title": "Internet Users (% of population)",
+            "yaxis_title": "% population",
+            "source": "World Bank",
+        },
+        {
+            "type": "bar",
+            "data_key": "internet_users_bar",
+            "extractor": _scalar_internet_users,
+            "title": "Internet Penetration — Latest Snapshot (%)",
+            "yaxis_title": "% population",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Homicide rate (bar) ──────────────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "homicide_rate",
+            "extractor": _scalar_homicide_rate,
+            "title": "Homicide Rate (per 100,000 people) — lower is safer",
+            "yaxis_title": "Homicides per 100k",
+            "source": "World Bank",
+            "ascending": True,
+        },
+        # ── Rule of law (line) ───────────────────────────────────────────────
+        {
+            "type": "line",
+            "data_key": "rule_of_law",
+            "extractor": lambda d: _wb_series(d, "rule_of_law"),
+            "title": "Rule of Law Index",
+            "yaxis_title": "Score (WGI)",
+            "source": "World Bank WGI",
+        },
+        # ── Scatter: rule of law vs homicide rate ─────────────────────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_rule_of_law,
+            "y_extractor": _scalar_homicide_rate,
+            "title": "Governance vs Safety: Rule of Law vs Homicide Rate",
+            "xaxis_title": "Rule of Law Index",
+            "yaxis_title": "Homicide Rate (per 100k)",
+            "source": "World Bank",
+        },
+        # ── Women in parliament (bar + line) ─────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "women_in_parliament",
+            "extractor": _scalar_women_parliament,
+            "title": "Women in Parliament (% of seats)",
+            "yaxis_title": "% of seats",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        {
+            "type": "line",
+            "data_key": "women_parliament_trend",
+            "extractor": lambda d: _wb_series(d, "women_in_parliament"),
+            "title": "Women in Parliament — Trend (%)",
+            "yaxis_title": "% of seats",
+            "source": "World Bank",
+        },
+        # ── CO₂ per capita (line + bar) ──────────────────────────────────────
+        {
+            "type": "line",
+            "data_key": "co2_trend",
+            "extractor": lambda d: _wb_series(d, "co2_per_capita"),
+            "title": "CO₂ Emissions per Capita (tonnes)",
+            "yaxis_title": "Tonnes CO₂/person",
+            "source": "World Bank",
+        },
+        {
+            "type": "bar",
+            "data_key": "co2_bar",
+            "extractor": _scalar_co2_per_capita,
+            "title": "CO₂ Emissions — Latest Snapshot (t per capita)",
+            "yaxis_title": "Tonnes CO₂/person",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── GNI per capita PPP (bar) ─────────────────────────────────────────
+        {
+            "type": "bar",
+            "data_key": "gni_per_capita",
+            "extractor": _scalar_gni_per_capita,
+            "title": "GNI per Capita PPP — Purchasing Power (int. $)",
+            "yaxis_title": "Int. $/person",
+            "source": "World Bank",
+            "ascending": False,
+        },
+        # ── Scatter: GNI per capita vs life expectancy ────────────────────────
+        {
+            "type": "scatter",
+            "x_extractor": _scalar_gni_per_capita,
+            "y_extractor": _scalar_life_expectancy,
+            "title": "Living Standards: GNI per Capita vs Life Expectancy",
+            "xaxis_title": "GNI per Capita PPP (int. $)",
+            "yaxis_title": "Life Expectancy (years)",
+            "source": "World Bank",
+        },
         # ── Climate ────────────────────────────────────────────────────────────
         {
             "type": "line",
@@ -686,16 +942,47 @@ def _count_countries_with_data(metric: dict, countries_data: dict) -> int:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+def _indicator_keywords(indicator: str) -> list[str]:
+    """Extract searchable keywords from a World Bank indicator name.
+
+    e.g. "internet_users_pct" → ["internet", "users"]
+         "life_expectancy"    → ["life", "expectancy"]
+         "co2_per_capita"     → ["co2", "capita"]
+    """
+    # Strip common suffixes that don't help matching
+    cleaned = indicator.replace("_pct", "").replace("_usd", "").replace("_gdp", "")
+    return [p for p in cleaned.split("_") if len(p) > 2]
+
+
+def _chart_is_relevant(metric: dict, worldbank_indicators: list[str]) -> bool:
+    """Return True if a registry chart entry matches any of the query's WB indicators."""
+    if not worldbank_indicators:
+        return False
+    title_lower = metric.get("title", "").lower()
+    data_key    = metric.get("data_key", "")
+    for wi in worldbank_indicators:
+        # Exact data_key match (e.g. data_key="internet_users" matches "internet_users_pct")
+        if data_key and (wi in data_key or data_key in wi):
+            return True
+        # Keyword match against chart title
+        for kw in _indicator_keywords(wi):
+            if kw in title_lower:
+                return True
+    return False
+
+
 def build_country_comparison_charts(
     countries_data: dict[str, Any],
     selected_tools: list[str],
     query_focus: str,
+    worldbank_indicators: list[str] | None = None,
 ) -> list[str]:
     """
     Build exactly 4 Plotly charts.
 
-    Dynamically picks the 4 metrics with the most country coverage from the
-    priority-ordered registry, then falls back to empty-state charts if needed.
+    Charts are selected by query relevance first (matching worldbank_indicators),
+    then by country coverage, then by visual variety — so the output always shows
+    what the user asked about rather than defaulting to GDP/inflation.
     """
     countries = list(countries_data.keys())
     colors = _color_map(countries)
@@ -709,7 +996,18 @@ def build_country_comparison_charts(
     ]
     candidates = [(m, n) for m, n in candidates if n >= 2]
 
-    # Two-pass selection:
+    # ── Sort candidates: query-relevant first, then by coverage ───────────────
+    # This ensures that for an "internet" query, internet_users charts bubble
+    # to the top even if GDP has slightly more country coverage.
+    if worldbank_indicators:
+        candidates.sort(
+            key=lambda item: (
+                0 if _chart_is_relevant(item[0], worldbank_indicators) else 1,
+                -item[1],  # descending coverage within each relevance bucket
+            )
+        )
+
+    # Three-pass selection:
     #   Pass 1 (variety): at most 1 of each visual type — max 4 distinct types.
     #   Pass 2 (relaxed): cap each type at 2 to fill remaining slots.
     #   Pass 3 (final fill): any leftover candidates, no type cap.

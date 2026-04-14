@@ -71,6 +71,24 @@ def _disp_series(dataset: dict) -> tuple[list[float], list[int]]:
     return yearly.values.astype(float).tolist(), yearly.index.astype(int).tolist()
 
 
+def _teleport_series(dataset: dict) -> tuple[list[float], list[int]]:
+    """Composite quality-of-life score from Teleport / World Bank proxy (latest value repeated)."""
+    cs = pd.DataFrame(dataset.get("city_scores") or [])
+    if cs.empty or "score_out_of_10" not in cs.columns:
+        return [], []
+    vals = cs["score_out_of_10"].dropna()
+    if vals.empty:
+        return [], []
+    # city_scores may not have a year column — use a single aggregate point
+    if "year" in cs.columns:
+        sub = cs.dropna(subset=["score_out_of_10", "year"])
+        if not sub.empty:
+            grouped = sub.groupby("year")["score_out_of_10"].mean().sort_index()
+            return grouped.values.astype(float).tolist(), grouped.index.astype(int).tolist()
+    # No year column — return a single mean value tagged to 2023
+    return [float(vals.mean())], [2023]
+
+
 def _conflict_events_series(dataset: dict) -> tuple[list[float], list[int]]:
     """Annual count of conflict events (ACLED)."""
     conf = pd.DataFrame(dataset.get("conflict_events") or [])
@@ -109,32 +127,74 @@ def _fatalities_series(dataset: dict) -> tuple[list[float], list[int]]:
 
 # (extractor_fn, human_label)
 _ALL_METRICS: dict[str, tuple[Any, str]] = {
-    "conflict_events":     (_conflict_events_series,                               "Conflict events"),
-    "fatalities":          (_fatalities_series,                                    "Fatalities"),
-    "political_stability": (lambda d: _wb_series(d, "political_stability"),        "Political stability index"),
-    "displacement":        (_disp_series,                                          "Displacement outflow"),
-    "unemployment":        (lambda d: _emp_series(d, "unemployment_rate"),         "Unemployment rate (%)"),
-    "youth_unemployment":  (lambda d: _emp_series(d, "youth_unemployment_rate"),   "Youth unemployment (%)"),
-    "temp_anomaly":        (lambda d: _clim_series(d, "avg_temp_anomaly_c"),       "Temp anomaly (°C)"),
-    "precipitation":       (lambda d: _clim_series(d, "annual_precipitation_mm"), "Precipitation (mm)"),
-    "gdp_growth":              (lambda d: _wb_series(d, "gdp_growth"),                  "GDP growth (%)"),
-    "gdp_per_capita":          (lambda d: _wb_series(d, "gdp_per_capita_usd"),          "GDP per capita (USD)"),
-    "inflation":               (lambda d: _wb_series(d, "inflation"),                   "Inflation (%)"),
-    "gini":                    (lambda d: _wb_series(d, "gini"),                        "Gini index"),
-    "health_expenditure_gdp":  (lambda d: _wb_series(d, "health_expenditure_gdp"),      "Health expenditure (% GDP)"),
-    "physicians_per_1000":     (lambda d: _wb_series(d, "physicians_per_1000"),         "Physicians per 1,000 people"),
-    "education_spend_gdp":     (lambda d: _wb_series(d, "education_spend_gdp"),         "Education spending (% GDP)"),
-    "poverty_headcount":       (lambda d: _wb_series(d, "poverty_headcount"),           "Poverty headcount (%)"),
+    # ── Conflict / safety ──────────────────────────────────────────────────────
+    "conflict_events":         (_conflict_events_series,                                    "Conflict events"),
+    "fatalities":              (_fatalities_series,                                         "Fatalities"),
+    # ── Governance (World Bank WGI) ────────────────────────────────────────────
+    "political_stability":     (lambda d: _wb_series(d, "political_stability"),             "Political stability index"),
+    "control_of_corruption":   (lambda d: _wb_series(d, "control_of_corruption"),           "Control of corruption index"),
+    "rule_of_law":             (lambda d: _wb_series(d, "rule_of_law"),                     "Rule of law index"),
+    "homicide_rate":           (lambda d: _wb_series(d, "homicide_rate"),                   "Homicide rate (per 100k)"),
+    # ── Displacement ──────────────────────────────────────────────────────────
+    "displacement":            (_disp_series,                                               "Displacement outflow"),
+    # ── Labour ────────────────────────────────────────────────────────────────
+    "unemployment":            (lambda d: _emp_series(d, "unemployment_rate"),              "Unemployment rate (%)"),
+    "youth_unemployment":      (lambda d: _emp_series(d, "youth_unemployment_rate"),        "Youth unemployment (%)"),
+    "female_labor_participation": (lambda d: _wb_series(d, "female_labor_participation"),   "Female labour participation (%)"),
+    # ── Economy ───────────────────────────────────────────────────────────────
+    "gdp_growth":              (lambda d: _wb_series(d, "gdp_growth"),                      "GDP growth (%)"),
+    "gdp_per_capita":          (lambda d: _wb_series(d, "gdp_per_capita_usd"),              "GDP per capita (USD)"),
+    "gni_per_capita_ppp":      (lambda d: _wb_series(d, "gni_per_capita_ppp"),              "GNI per capita PPP (int. $)"),
+    "inflation":               (lambda d: _wb_series(d, "inflation"),                       "Inflation (%)"),
+    "gini":                    (lambda d: _wb_series(d, "gini"),                            "Gini index"),
+    "poverty_headcount":       (lambda d: _wb_series(d, "poverty_headcount"),               "Poverty headcount (%)"),
+    # ── Health ────────────────────────────────────────────────────────────────
+    "health_expenditure_gdp":  (lambda d: _wb_series(d, "health_expenditure_gdp"),          "Health expenditure (% GDP)"),
+    "physicians_per_1000":     (lambda d: _wb_series(d, "physicians_per_1000"),             "Physicians per 1,000 people"),
+    "life_expectancy":         (lambda d: _wb_series(d, "life_expectancy"),                 "Life expectancy (years)"),
+    "infant_mortality":        (lambda d: _wb_series(d, "infant_mortality"),                "Infant mortality (per 1,000 births)"),
+    # ── Education ─────────────────────────────────────────────────────────────
+    "education_spend_gdp":     (lambda d: _wb_series(d, "education_spend_gdp"),             "Education spending (% GDP)"),
+    # ── Infrastructure / access ───────────────────────────────────────────────
+    "sanitation_access":       (lambda d: _wb_series(d, "sanitation_access"),               "Sanitation access (% pop.)"),
+    "clean_water_access":      (lambda d: _wb_series(d, "clean_water_access"),              "Clean water access (% pop.)"),
+    "electricity_access":      (lambda d: _wb_series(d, "electricity_access"),              "Electricity access (% pop.)"),
+    "internet_users_pct":      (lambda d: _wb_series(d, "internet_users_pct"),              "Internet users (% pop.)"),
+    "urban_population_pct":    (lambda d: _wb_series(d, "urban_population_pct"),            "Urban population (% total)"),
+    # ── Gender ────────────────────────────────────────────────────────────────
+    "women_in_parliament":     (lambda d: _wb_series(d, "women_in_parliament"),             "Women in parliament (%)"),
+    "adolescent_fertility_rate": (lambda d: _wb_series(d, "adolescent_fertility_rate"),     "Adolescent fertility rate"),
+    # ── Environment ───────────────────────────────────────────────────────────
+    "co2_per_capita":          (lambda d: _wb_series(d, "co2_per_capita"),                  "CO₂ emissions per capita (t)"),
+    "temp_anomaly":            (lambda d: _clim_series(d, "avg_temp_anomaly_c"),            "Temp anomaly (°C)"),
+    "precipitation":           (lambda d: _clim_series(d, "annual_precipitation_mm"),      "Precipitation (mm)"),
+    # ── Quality of life ───────────────────────────────────────────────────────
+    "teleport_score":          (_teleport_series,                                           "Quality-of-life score (0–10)"),
 }
 
 # Which metrics to activate per tool, in priority order within that tool
 _TOOL_METRICS: dict[str, list[str]] = {
     "acled":       ["conflict_events", "fatalities"],
     "unhcr":       ["displacement"],
-    "worldbank":   ["political_stability", "gdp_growth", "gdp_per_capita", "inflation", "gini",
-                   "health_expenditure_gdp", "physicians_per_1000", "education_spend_gdp", "poverty_headcount"],
-    "employment":  ["unemployment", "youth_unemployment"],
-    "environment": ["temp_anomaly", "precipitation"],
+    "worldbank":   [
+        # Governance
+        "political_stability", "control_of_corruption", "rule_of_law", "homicide_rate",
+        # Economy
+        "gdp_growth", "gdp_per_capita", "gni_per_capita_ppp", "inflation", "gini", "poverty_headcount",
+        # Health
+        "health_expenditure_gdp", "physicians_per_1000", "life_expectancy", "infant_mortality",
+        # Education
+        "education_spend_gdp",
+        # Infrastructure / access
+        "sanitation_access", "clean_water_access", "electricity_access", "internet_users_pct", "urban_population_pct",
+        # Gender
+        "female_labor_participation", "women_in_parliament", "adolescent_fertility_rate",
+        # Environment
+        "co2_per_capita",
+    ],
+    "employment":  ["unemployment", "youth_unemployment", "female_labor_participation"],
+    "environment": ["temp_anomaly", "precipitation", "co2_per_capita"],
+    "teleport":    ["teleport_score"],
     "news":        [],
 }
 
@@ -145,30 +205,149 @@ _TOOL_ANCHOR: dict[str, str] = {
     "environment": "temp_anomaly",
     "employment":  "unemployment",
     "worldbank":   "political_stability",
+    "teleport":    "teleport_score",
 }
 
 # Human-readable migration implication per metric (for volatility finding)
 _METRIC_VOLATILITY_IMPLICATIONS: dict[str, str] = {
-    "conflict_events":     "unpredictable security — conflict levels can spike suddenly",
-    "fatalities":          "highly unstable conflict intensity — fatalities vary dramatically year to year",
-    "displacement":        "unstable migration pressure — outflows fluctuate significantly",
-    "political_stability": "unstable governance — political conditions shift frequently",
-    "unemployment":        "unstable employment — boom-and-bust hiring cycles",
-    "youth_unemployment":  "volatile youth job market — entry-level prospects are hard to predict",
-    "inflation":           "erratic cost of living — purchasing power can shift sharply",
-    "gdp_growth":          "unpredictable income growth — economic conditions are inconsistent",
-    "temp_anomaly":            "high climate variability — conditions are becoming less predictable",
-    "health_expenditure_gdp":  "inconsistent healthcare investment — access to public health services may be unreliable",
-    "physicians_per_1000":     "uneven healthcare workforce — medical access varies year to year",
-    "education_spend_gdp":     "volatile education funding — quality of schooling may fluctuate significantly",
-    "poverty_headcount":       "unstable poverty levels — economic conditions shift for the most vulnerable",
+    # Conflict / safety
+    "conflict_events":           "unpredictable security — conflict levels can spike suddenly",
+    "fatalities":                "highly unstable conflict intensity — fatalities vary dramatically year to year",
+    # Displacement
+    "displacement":              "unstable migration pressure — outflows fluctuate significantly",
+    # Governance
+    "political_stability":       "unstable governance — political conditions shift frequently",
+    "control_of_corruption":     "inconsistent anti-corruption enforcement — business and legal environments are hard to predict",
+    "rule_of_law":               "volatile rule-of-law scores — legal protection for migrants and residents is uneven",
+    "homicide_rate":             "fluctuating lethal violence — personal safety conditions are unpredictable",
+    # Labour
+    "unemployment":              "unstable employment — boom-and-bust hiring cycles",
+    "youth_unemployment":        "volatile youth job market — entry-level prospects are hard to predict",
+    "female_labor_participation":"uneven gender integration — women's economic opportunity shifts year to year",
+    # Economy
+    "inflation":                 "erratic cost of living — purchasing power can shift sharply",
+    "gdp_growth":                "unpredictable income growth — economic conditions are inconsistent",
+    "gni_per_capita_ppp":        "volatile real incomes — purchasing-power-adjusted living standards fluctuate",
+    "gini":                      "shifting income distribution — inequality can widen or narrow rapidly",
+    "poverty_headcount":         "unstable poverty levels — economic conditions shift for the most vulnerable",
+    # Health
+    "health_expenditure_gdp":    "inconsistent healthcare investment — access to public health services may be unreliable",
+    "physicians_per_1000":       "uneven healthcare workforce — medical access varies year to year",
+    "life_expectancy":           "fluctuating health outcomes — life expectancy can be affected by crises or policy changes",
+    "infant_mortality":          "volatile infant health outcomes — public health system reliability is uncertain",
+    # Education
+    "education_spend_gdp":       "volatile education funding — quality of schooling may fluctuate significantly",
+    # Infrastructure / access
+    "sanitation_access":         "inconsistent sanitation — access to safe facilities is not guaranteed",
+    "clean_water_access":        "unreliable water access — safe drinking water availability varies significantly",
+    "electricity_access":        "unstable energy access — power availability is inconsistent for daily life and business",
+    "internet_users_pct":        "uneven digital access — connectivity varies, affecting remote work and information access",
+    "urban_population_pct":      "rapid urbanisation shifts — city capacity and quality can change fast",
+    # Gender
+    "women_in_parliament":       "fluctuating political gender representation — policy direction on gender equity is volatile",
+    "adolescent_fertility_rate": "shifting demographic patterns — population age structure is in flux",
+    # Environment
+    "co2_per_capita":            "volatile emissions trajectory — environmental policy and industrial output fluctuate",
+    "temp_anomaly":              "high climate variability — conditions are becoming less predictable",
+    # Quality of life
+    "teleport_score":            "inconsistent quality-of-life signals — composite scores shift with policy and economic changes",
 }
 
 
-def _build_active_metrics(selected_tools: list[str]) -> list[tuple[str, Any]]:
-    """Return (metric_name, extractor) pairs ordered by tool priority."""
+# Which direction is "better" for each metric
+_METRIC_HIGHER_IS_BETTER: dict[str, bool] = {
+    # Higher = better
+    "internet_users_pct":         True,
+    "electricity_access":         True,
+    "sanitation_access":          True,
+    "clean_water_access":         True,
+    "life_expectancy":            True,
+    "gdp_per_capita":             True,
+    "gni_per_capita_ppp":         True,
+    "rule_of_law":                True,
+    "political_stability":        True,
+    "control_of_corruption":      True,
+    "women_in_parliament":        True,
+    "female_labor_participation": True,
+    "teleport_score":             True,
+    "physicians_per_1000":        True,
+    "education_spend_gdp":        True,
+    "health_expenditure_gdp":     True,
+    "gdp_growth":                 True,
+    "urban_population_pct":       True,
+    # Lower = better
+    "inflation":                  False,
+    "homicide_rate":              False,
+    "infant_mortality":           False,
+    "poverty_headcount":          False,
+    "conflict_events":            False,
+    "fatalities":                 False,
+    "displacement":               False,
+    "co2_per_capita":             False,
+    "gini":                       False,
+    "unemployment":               False,
+    "youth_unemployment":         False,
+    "adolescent_fertility_rate":  False,
+    "temp_anomaly":               False,
+}
+
+
+def _finding_best_worst(
+    metric_name: str,
+    stats_summary: dict,
+    label: str,
+    higher_is_better: bool,
+) -> dict | None:
+    """Generic best-vs-worst finding for any metric."""
+    means = {
+        c: stats_summary[c][metric_name]["mean"]
+        for c in stats_summary
+        if stats_summary[c].get(metric_name, {}).get("mean") is not None
+    }
+    if len(means) < 2:
+        return None
+    best  = max(means, key=lambda c: means[c]) if higher_is_better else min(means, key=lambda c: means[c])
+    worst = min(means, key=lambda c: means[c]) if higher_is_better else max(means, key=lambda c: means[c])
+    if best == worst:
+        return None
+    bv, wv = means[best], means[worst]
+    gap = abs(bv - wv)
+    direction_word = "highest" if higher_is_better else "lowest"
+    return {
+        "type":   "growth",
+        "title":  f"{best} has the {direction_word} {label.lower()}",
+        "value":  f"{bv:.2f}  (vs {wv:.2f} for {worst})",
+        "detail": (
+            f"{best} averages {bv:.2f} on {label.lower()} — "
+            f"a gap of {gap:.2f} compared to {worst} ({wv:.2f}). "
+            f"{'Higher' if higher_is_better else 'Lower'} {label.lower()} "
+            f"{'is a positive signal' if higher_is_better else 'means better outcomes'} "
+            f"for residents and migrants considering relocation."
+        ),
+    }
+
+
+def _build_active_metrics(
+    selected_tools: list[str],
+    worldbank_indicators: list[str] | None = None,
+) -> list[tuple[str, Any]]:
+    """Return (metric_name, extractor) pairs ordered by tool priority.
+
+    If worldbank_indicators is provided and non-empty, those metrics are
+    prepended (in order) so they are treated as the most relevant.
+    """
     seen: set[str] = set()
     result: list[tuple[str, Any]] = []
+
+    # Prepend query-specific WB indicators first
+    if worldbank_indicators:
+        for metric in worldbank_indicators:
+            if metric not in seen and metric in _ALL_METRICS:
+                seen.add(metric)
+                extractor, _ = _ALL_METRICS[metric]
+                result.append((metric, extractor))
+
+    # Then add remaining metrics from tool priority order
     for tool in selected_tools:
         for metric in _TOOL_METRICS.get(tool, []):
             if metric not in seen and metric in _ALL_METRICS:
@@ -349,13 +528,21 @@ def _finding_income_growth(per_capita_cagrs: dict) -> dict | None:
     }
 
 
-def _finding_anomaly(anomalies: dict, selected_tools: list[str]) -> dict | None:
+def _finding_anomaly(
+    anomalies: dict,
+    selected_tools: list[str],
+    priority_override: list[str] | None = None,
+) -> dict | None:
     """Surface the anomaly in the most query-relevant metric."""
-    priority: list[str] = []
+    priority: list[str] = list(priority_override or [])
     for tool in selected_tools:
-        priority.extend(_TOOL_METRICS.get(tool, []))
+        for m in _TOOL_METRICS.get(tool, []):
+            if m not in priority:
+                priority.append(m)
     # Generic fallbacks
-    priority += ["gdp_growth", "inflation", "unemployment", "temp_anomaly"]
+    for m in ["gdp_growth", "inflation", "unemployment", "temp_anomaly"]:
+        if m not in priority:
+            priority.append(m)
 
     for target_metric in priority:
         for country, anom_list in anomalies.items():
@@ -413,11 +600,110 @@ def _finding_correlation(
     }
 
 
-def _finding_volatility(stats_summary: dict, selected_tools: list[str]) -> dict | None:
+def _finding_governance_ranking(stats_summary: dict, selected_tools: list[str]) -> dict | None:
+    """Best-vs-worst comparison for rule of law or control of corruption."""
+    if "worldbank" not in selected_tools:
+        return None
+    for metric_key, label in [("rule_of_law", "rule of law"), ("control_of_corruption", "control of corruption")]:
+        means = {
+            c: stats_summary[c][metric_key]["mean"]
+            for c in stats_summary
+            if stats_summary[c].get(metric_key, {}).get("mean") is not None
+        }
+        if len(means) < 2:
+            continue
+        best  = max(means, key=lambda c: means[c])
+        worst = min(means, key=lambda c: means[c])
+        return {
+            "type":   "growth",
+            "title":  f"{best} leads on {label}",
+            "value":  f"Index {means[best]:.2f}  (vs {means[worst]:.2f} for {worst})",
+            "detail": (
+                f"The World Bank {label} index places {best} at {means[best]:.2f} on average — "
+                f"the highest score in this comparison group. {worst} scores {means[worst]:.2f}, "
+                f"indicating weaker institutional quality and legal reliability. "
+                f"For migrants, a higher {label} score signals predictable institutions and "
+                f"consistent enforcement of rights and contracts."
+            ),
+        }
+    return None
+
+
+def _finding_life_expectancy(stats_summary: dict, selected_tools: list[str]) -> dict | None:
+    """Highest vs lowest life expectancy comparison."""
+    if "worldbank" not in selected_tools:
+        return None
+    means = {
+        c: stats_summary[c]["life_expectancy"]["mean"]
+        for c in stats_summary
+        if stats_summary[c].get("life_expectancy", {}).get("mean") is not None
+    }
+    if len(means) < 2:
+        return None
+    best  = max(means, key=lambda c: means[c])
+    worst = min(means, key=lambda c: means[c])
+    gap   = means[best] - means[worst]
+    return {
+        "type":   "growth",
+        "title":  f"{best} has the highest life expectancy",
+        "value":  f"{means[best]:.1f} years  (vs {means[worst]:.1f} for {worst})",
+        "detail": (
+            f"{best}'s average life expectancy is {means[best]:.1f} years — "
+            f"{gap:.1f} years more than {worst} ({means[worst]:.1f} years). "
+            f"Life expectancy is a composite health signal that reflects healthcare system "
+            f"quality, nutrition, and safety. For migrants, it is one of the clearest "
+            f"indicators of the overall quality of life available in a country."
+        ),
+    }
+
+
+def _finding_access_gap(stats_summary: dict, selected_tools: list[str]) -> dict | None:
+    """Sanitation, clean water, or electricity access gap across countries."""
+    if "worldbank" not in selected_tools:
+        return None
+    for metric_key, label in [
+        ("sanitation_access", "sanitation access"),
+        ("clean_water_access", "clean water access"),
+        ("electricity_access", "electricity access"),
+    ]:
+        means = {
+            c: stats_summary[c][metric_key]["mean"]
+            for c in stats_summary
+            if stats_summary[c].get(metric_key, {}).get("mean") is not None
+        }
+        if len(means) < 2:
+            continue
+        best  = max(means, key=lambda c: means[c])
+        worst = min(means, key=lambda c: means[c])
+        gap   = means[best] - means[worst]
+        if gap < 5:
+            continue  # not meaningful
+        return {
+            "type":   "volatility",
+            "title":  f"Large gap in {label}",
+            "value":  f"{means[best]:.1f}% vs {means[worst]:.1f}%",
+            "detail": (
+                f"{best} achieves {means[best]:.1f}% {label} — "
+                f"{gap:.0f} percentage points higher than {worst} ({means[worst]:.1f}%). "
+                f"This gap is a critical infrastructure signal: migrants moving from "
+                f"low-access to high-access countries gain significantly improved "
+                f"daily living conditions and public health outcomes."
+            ),
+        }
+    return None
+
+
+def _finding_volatility(
+    stats_summary: dict,
+    selected_tools: list[str],
+    priority_metrics: list[str] | None = None,
+) -> dict | None:
     """Most volatile metric in query-priority order."""
-    priority: list[str] = []
+    priority: list[str] = list(priority_metrics or [])
     for tool in selected_tools:
-        priority.extend(_TOOL_METRICS.get(tool, []))
+        for m in _TOOL_METRICS.get(tool, []):
+            if m not in priority:
+                priority.append(m)
 
     for metric_name in priority:
         stds = {
@@ -456,15 +742,14 @@ def _finding_volatility(stats_summary: dict, selected_tools: list[str]) -> dict 
 def run_eda(
     countries_data: dict[str, Any],
     selected_tools: list[str],
+    query_focus: str = "",
+    worldbank_indicators: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Query-aware EDA: metric set is driven entirely by selected_tools.
+    Query-aware EDA: metric set is driven by selected_tools and worldbank_indicators.
 
-    For a safety query (acled selected): conflict events, fatalities, political stability.
-    For an economic query (worldbank): GDP, inflation, income.
-    For a labour query (employment): unemployment, youth unemployment.
-    For environment: temperature anomaly, precipitation.
-    For displacement (unhcr): outflow trends.
+    worldbank_indicators (from LLM tool selector) are prepended so the most
+    query-relevant metrics appear first and drive findings generation.
 
     Chart hints always prefer distribution_box and correlation_heatmap first —
     purely statistical visuals distinct from the time-series comparison charts.
@@ -476,7 +761,7 @@ def run_eda(
     charts_hint: list[str] = []
 
     # ── Build tool-driven active metric list ──────────────────────────────────
-    active_metrics = _build_active_metrics(selected_tools)
+    active_metrics = _build_active_metrics(selected_tools, worldbank_indicators)
     if not active_metrics:
         # Absolute fallback
         active_metrics = [
@@ -532,7 +817,15 @@ def run_eda(
     # ── 4. Cross-country correlation ─────────────────────────────────────────
     correlation_results: list[dict] = []
     latest_matrix = _build_latest_matrix(countries_data, active_metrics)
-    anchor_metric = _primary_anchor(selected_tools, set(latest_matrix.columns.tolist()))
+    # Use the top worldbank_indicator as anchor if available
+    _available_cols = set(latest_matrix.columns.tolist())
+    if worldbank_indicators:
+        anchor_metric = next(
+            (m for m in worldbank_indicators if m in _available_cols),
+            _primary_anchor(selected_tools, _available_cols),
+        )
+    else:
+        anchor_metric = _primary_anchor(selected_tools, _available_cols)
 
     if (
         not latest_matrix.empty
@@ -545,74 +838,81 @@ def run_eda(
             target_col = anchor_metric if anchor_metric in complete.columns else complete.columns[0]
             correlation_results = run_correlation_analysis(corr_input, target_col)
 
-    # ── 5. Narrative findings — tool-priority order ───────────────────────────
+    # ── 5. Narrative findings — query-topic priority order ────────────────────
 
-    # ACLED: conflict event count spread (cross-sectional bar)
-    if "acled" in selected_tools:
-        f = _finding_conflict_spread(countries_data)
+    # Step 1: best/worst finding for top 3 most-relevant metrics
+    for metric_name, _ in active_metrics[:3]:
+        if len(findings) >= 2:
+            break
+        higher = _METRIC_HIGHER_IS_BETTER.get(metric_name, True)
+        _, label = _ALL_METRICS.get(metric_name, (None, metric_name.replace("_", " ")))
+        f = _finding_best_worst(metric_name, stats_summary, label, higher)
         if f:
             findings.append(f)
             charts_hint.append("distribution_box")
 
-    # ACLED: fatality spread (if conflict finding didn't fire or we still have room)
-    if "acled" in selected_tools and len(findings) < 2:
-        f = _finding_fatality_spread(countries_data)
-        if f:
-            findings.append(f)
-            charts_hint.append("distribution_box")
-
-    # WORLDBANK: political stability ranking
-    if "worldbank" in selected_tools and len(findings) < 3:
-        f = _finding_stability_ranking(stats_summary)
-        if f:
-            findings.append(f)
-            charts_hint.append("distribution_box")
-
-    # UNHCR: displacement trend (CAGR)
-    if "unhcr" in selected_tools and len(findings) < 3:
-        f = _finding_displacement_trend(growth_rates)
-        if f:
-            findings.append(f)
+    # Step 2: CAGR trend for the top metric
+    if len(findings) < 3 and active_metrics:
+        top_metric = active_metrics[0][0]
+        cagrs = {c: growth_rates[c].get(top_metric, {}).get("cagr") for c in growth_rates}
+        cagrs = {c: v for c, v in cagrs.items() if v is not None}
+        if len(cagrs) >= 2:
+            higher = _METRIC_HIGHER_IS_BETTER.get(top_metric, True)
+            leader = max(cagrs, key=lambda c: cagrs[c]) if higher else min(cagrs, key=lambda c: cagrs[c])
+            lv = cagrs[leader]
+            _, label = _ALL_METRICS.get(top_metric, (None, top_metric.replace("_", " ")))
+            findings.append({
+                "type":   "growth",
+                "title":  f"{leader} shows {'fastest growth' if lv > 0 else 'sharpest decline'} in {label}",
+                "value":  f"CAGR {lv * 100:+.1f}% per year",
+                "detail": (
+                    f"{leader}'s {label.lower()} is "
+                    f"{'growing' if lv > 0 else 'shrinking'} {abs(lv) * 100:.1f}% per year — "
+                    f"the {'strongest' if (higher and lv > 0) else 'most notable'} "
+                    f"trajectory in this comparison."
+                ),
+            })
             charts_hint.append("growth_rate_bar")
 
-    # Correlation (heatmap — always visually distinct)
+    # Step 3: Anomaly (highest-z metric from active_metrics[:4])
+    if len(findings) < 4:
+        priority_override = [m for m, _ in active_metrics[:4]]
+        f = _finding_anomaly(anomalies, selected_tools, priority_override=priority_override)
+        if f:
+            findings.append(f)
+            charts_hint.append("anomaly_timeline")
+
+    # Step 4: Correlation
     if len(findings) < 4:
         f = _finding_correlation(correlation_results, anchor_metric, len(countries_data))
         if f:
             findings.append(f)
             charts_hint.append("correlation_heatmap")
 
-    # Anomaly detection (z-score spike on the most relevant metric)
+    # Step 5: Volatility fallback using active metric priority
     if len(findings) < 4:
-        f = _finding_anomaly(anomalies, selected_tools)
-        if f:
-            findings.append(f)
-            charts_hint.append("anomaly_timeline")
-
-    # Volatility spread (mean ± σ bar — purely statistical)
-    if len(findings) < 4:
-        f = _finding_volatility(stats_summary, selected_tools)
+        f = _finding_volatility(
+            stats_summary,
+            selected_tools,
+            priority_metrics=[m for m, _ in active_metrics[:6]],
+        )
         if f:
             findings.append(f)
             charts_hint.append("distribution_box")
-
-    # Economic income growth (only if not already covered and worldbank is selected)
-    if len(findings) < 2 and "worldbank" in selected_tools:
-        f = _finding_income_growth(per_capita_cagrs)
-        if f:
-            findings.append(f)
-            charts_hint.append("growth_rate_bar")
 
     # Guarantee at least one statistical chart (not time-series)
     if "distribution_box" not in charts_hint and "correlation_heatmap" not in charts_hint:
         charts_hint = ["distribution_box"] + charts_hint
 
     return {
-        "findings":       findings[:4],
-        "growth_rates":   growth_rates,
-        "anomalies":      anomalies,
-        "stats_summary":  stats_summary,
-        "correlations":   correlation_results[:6],
-        "charts_hint":    list(dict.fromkeys(charts_hint))[:2],  # max 2, deduped
-        "latest_matrix":  latest_matrix.to_dict() if not latest_matrix.empty else {},
+        "findings":              findings[:4],
+        "growth_rates":          growth_rates,
+        "anomalies":             anomalies,
+        "stats_summary":         stats_summary,
+        "correlations":          correlation_results[:6],
+        "charts_hint":           list(dict.fromkeys(charts_hint))[:2],  # max 2, deduped
+        "latest_matrix":         latest_matrix.to_dict() if not latest_matrix.empty else {},
+        # Ordered list of metric names in query-priority order — used by chart builders
+        # so EDA charts always show metrics relevant to the user's query, not generic ones.
+        "active_metrics_ordered": [m for m, _ in active_metrics],
     }

@@ -7,8 +7,9 @@ Data flows through ADK session state:
   user_query      → set before runner starts
   selector_output ← ToolSelectorADKAgent
   countries_data  ← DataCollectorADKAgent
+  eda_findings    ← EDAAnalystADKAgent
   charts          ← ChartEvidenceADKAgent
-  evidences       ← ChartEvidenceADKAgent
+  hypotheses      ← ChartEvidenceADKAgent
   tool_stats      ← ChartEvidenceADKAgent
 
 SSE events are fired directly by each agent via the pipeline_emit contextvar,
@@ -35,7 +36,7 @@ from agents.adk_agents import (
     pipeline_query,
 )
 from agents.progress_tracker import reset_tracker
-from models.schemas import CountryComparisonResult, Evidence
+from models.schemas import CountryComparisonResult, HypothesisInsight
 
 _APP_NAME = "migration_intel"
 _USER_ID = "web_user"
@@ -119,22 +120,23 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
 
     state = await _run_adk_pipeline(query)
 
+    import json as _json
+
     selector_data = state.get("selector_output") or {}
-    evidences_raw = state.get("evidences") or []
+    hypotheses_raw = state.get("hypotheses") or []
     chart_jsons: list[str] = []
 
     # Re-serialise charts to JSON strings for CountryComparisonResult.chart_jsons
     for chart_dict in (state.get("charts") or []):
         try:
-            import json
-            chart_jsons.append(json.dumps(chart_dict))
+            chart_jsons.append(_json.dumps(chart_dict))
         except Exception:
             pass
 
-    evidences = []
-    for e in evidences_raw:
+    hypotheses = []
+    for h in hypotheses_raw:
         try:
-            evidences.append(Evidence.model_validate(e))
+            hypotheses.append(HypothesisInsight.model_validate(h))
         except Exception:
             pass
 
@@ -143,7 +145,7 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
         countries=selector_data.get("countries", []),
         country_codes=selector_data.get("country_codes", []),
         tools_used=selector_data.get("selected_tools", []),
-        evidences=evidences,
+        hypotheses=hypotheses,
         summary=selector_data.get("reasoning", ""),
         chart_jsons=chart_jsons,
         query_focus=selector_data.get("query_focus", ""),

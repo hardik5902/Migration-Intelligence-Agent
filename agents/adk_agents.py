@@ -10,7 +10,7 @@ Session state is the data bus:
   • selector_output   (dict)          — written by ToolSelectorADKAgent
   • countries_data    (dict)          — written by DataCollectorADKAgent
   • charts            (list)          — written by ChartEvidenceADKAgent
-  • evidences         (list)          — written by ChartEvidenceADKAgent
+  • hypotheses        (list)          — written by ChartEvidenceADKAgent
   • tool_stats        (dict)          — written by ChartEvidenceADKAgent
 
 The SSE emit callback and the query are stored in contextvars so every agent
@@ -32,12 +32,12 @@ from typing_extensions import override
 
 from agents.data_collector import collect_data_for_countries
 from agents.eda_analyst import run_eda
-from agents.evidence_generator import generate_evidences
+from agents.evidence_generator import generate_hypotheses
 from agents.pipeline_config import TOOL_DATA_KEYS
 from agents.tool_selector import analyze_query_with_llm
 from analysis.country_charts import build_country_comparison_charts
 from analysis.eda_charts import build_eda_charts
-from models.schemas import ToolSelectorOutput
+from models.schemas import HypothesisInsight, ToolSelectorOutput
 
 # ---------------------------------------------------------------------------
 # Context vars — set once per pipeline run; readable by every agent coroutine
@@ -77,6 +77,22 @@ class ToolSelectorADKAgent(BaseAgent):
         query = pipeline_query.get() or ctx.session.state.get("user_query", "")
         selector = await analyze_query_with_llm(query)
 
+        # If LLM determined query is out of scope, stop the pipeline immediately
+        if not selector.in_scope:
+            _emit("out_of_scope", {
+                "reason": selector.out_of_scope_reason or (
+                    "This query doesn't relate to countries, migration, or quality-of-life "
+                    "metrics that our data sources can answer."
+                ),
+            })
+            yield Event(
+                invocation_id=ctx.invocation_id,
+                author=self.name,
+                branch=ctx.branch,
+                actions=EventActions(state_delta={"out_of_scope": True}),
+            )
+            return
+
         _emit("selection", {
             "countries":     selector.countries,
             "country_codes": selector.country_codes,
@@ -84,6 +100,7 @@ class ToolSelectorADKAgent(BaseAgent):
             "year_from":     selector.year_from,
             "year_to":       selector.year_to,
             "query_focus":   selector.query_focus,
+            "proxy_note":    selector.proxy_note,
             "k":             selector.k,
         })
 
@@ -108,6 +125,9 @@ class DataCollectorADKAgent(BaseAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        if ctx.session.state.get("out_of_scope"):
+            return  # pipeline was stopped by ToolSelectorADKAgent
+
         selector = ToolSelectorOutput.model_validate(
             ctx.session.state.get("selector_output", {})
         )
@@ -150,6 +170,9 @@ class EDAAnalystADKAgent(BaseAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        if ctx.session.state.get("out_of_scope"):
+            return
+
         selector = ToolSelectorOutput.model_validate(
             ctx.session.state.get("selector_output", {})
         )
@@ -166,6 +189,8 @@ class EDAAnalystADKAgent(BaseAgent):
             run_eda,
             countries_data,
             selector.selected_tools,
+            selector.query_focus,
+            selector.worldbank_indicators,
         )
 
         # Build up to 2 EDA-specific charts (heatmap / CAGR bar / anomaly / spread)
@@ -207,12 +232,15 @@ class EDAAnalystADKAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 
 class ChartEvidenceADKAgent(BaseAgent):
-    """Builds 4 Plotly charts and 3 evidence insights concurrently; emits both."""
+    """Builds 4 Plotly charts and 3 hypothesis insights concurrently; emits both."""
 
     @override
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        if ctx.session.state.get("out_of_scope"):
+            return
+
         from plotly.io import from_json as _plotly_from_json
 
         selector = ToolSelectorOutput.model_validate(
@@ -231,15 +259,16 @@ class ChartEvidenceADKAgent(BaseAgent):
             ),
         })
 
-        # Run chart building (sync/CPU) and evidence LLM call concurrently
-        chart_jsons, evidences = await asyncio.gather(
+        # Run chart building (sync/CPU) and hypothesis LLM call concurrently
+        chart_jsons, hypotheses = await asyncio.gather(
             asyncio.to_thread(
                 build_country_comparison_charts,
                 countries_data,
                 selector.selected_tools,
                 selector.query_focus,
+                selector.worldbank_indicators,   # prioritise query-relevant charts
             ),
-            generate_evidences(query, countries_data, selector.selected_tools, eda_findings),
+            generate_hypotheses(query, countries_data, selector.selected_tools, eda_findings, selector.query_focus),
         )
 
         # Normalise Plotly JSON strings → dicts for the browser JS client
@@ -269,7 +298,7 @@ class ChartEvidenceADKAgent(BaseAgent):
         })
 
         _emit("evidence", {
-            "evidences":   [e.model_dump() for e in evidences],
+            "hypotheses":  [h.model_dump() for h in hypotheses],
             "tool_stats":  tool_stats,
             "countries":   selector.countries,
             "tools_used":  selector.selected_tools,
@@ -284,9 +313,9 @@ class ChartEvidenceADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "charts":     charts_normalized,
-                    "evidences":  [e.model_dump() for e in evidences],
-                    "tool_stats": tool_stats,
+                    "charts":      charts_normalized,
+                    "hypotheses":  [h.model_dump() for h in hypotheses],
+                    "tool_stats":  tool_stats,
                 }
             ),
         )
