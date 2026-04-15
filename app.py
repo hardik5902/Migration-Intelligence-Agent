@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,14 @@ from tools.duckdb_tools import _ALLOWED_TABLES, _TTL_HOURS, _connect, db_path
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+
+logger = logging.getLogger(__name__)
+
+PIPELINE_HEARTBEAT_SECONDS = int(os.environ.get("PIPELINE_HEARTBEAT_SECONDS", "15"))
+PIPELINE_STREAM_TIMEOUT_SECONDS = int(os.environ.get("PIPELINE_STREAM_TIMEOUT_SECONDS", "300"))
 
 app = Flask(__name__)
 
@@ -72,6 +83,24 @@ def _sse(event_name: str, data: Any) -> str:
     return f"event: {event_name}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+def _summarize_event(name: str, data: Any) -> str:
+    if not isinstance(data, dict):
+        return str(data)
+    if name == "stage":
+        return data.get("label") or data.get("message") or "stage update"
+    if name == "selection":
+        return (
+            f"countries={len(data.get('countries') or [])}, "
+            f"tools={len(data.get('tools') or [])}"
+        )
+    if name in {"charts", "eda_charts"}:
+        key = "charts" if name == "charts" else "eda_charts"
+        return f"{key}={len(data.get(key) or [])}"
+    if name == "evidence":
+        return f"hypotheses={len(data.get('hypotheses') or [])}"
+    return data.get("message") or data.get("reason") or "event received"
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html", tool_cards=TOOL_CARDS)
@@ -80,10 +109,14 @@ def index() -> str:
 @app.post("/analyze")
 def analyze() -> Response:
     query = (request.form.get("query") or "").strip()
+    request_id = uuid.uuid4().hex[:8]
+
+    logger.info("[%s] /analyze received query_length=%s", request_id, len(query))
 
     if not query:
         def _err():
             yield _sse("error", {"message": "Please enter a question before running the analysis."})
+        logger.warning("[%s] Rejecting empty query", request_id)
         return Response(stream_with_context(_err()), content_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -91,6 +124,7 @@ def analyze() -> Response:
     if not _safe:
         def _injection_err(_reason=_reason):
             yield _sse("out_of_scope", {"reason": _reason})
+        logger.warning("[%s] Query blocked by guard: %s", request_id, _reason)
         return Response(stream_with_context(_injection_err()), content_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -100,36 +134,71 @@ def analyze() -> Response:
                 "Authentication not configured. "
                 "Set GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS in your .env file."
             )})
+        logger.error("[%s] Authentication is not configured", request_id)
         return Response(stream_with_context(_auth_err()), content_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     q: queue.Queue = queue.Queue()
 
     def emit(name: str, data: Any) -> None:
+        logger.info("[%s] Pipeline event=%s %s", request_id, name, _summarize_event(name, data))
         q.put((name, data))
 
     def _run_pipeline() -> None:
         import asyncio as _asyncio
+        started_at = time.monotonic()
+        logger.info("[%s] Background pipeline thread started", request_id)
         try:
             _asyncio.run(run_country_pipeline_streaming(query, emit))
         except Exception as exc:
+            logger.exception("[%s] Pipeline execution failed", request_id)
             q.put(("error", {"message": str(exc)}))
         finally:
+            duration = time.monotonic() - started_at
+            logger.info("[%s] Background pipeline thread finished in %.2fs", request_id, duration)
             q.put(None)  # sentinel — tells the generator to stop
 
     threading.Thread(target=_run_pipeline, daemon=True).start()
 
     def generate():
+        logger.info("[%s] SSE stream opened", request_id)
+        yield _sse("stage", {
+            "step": 0,
+            "total": 5,
+            "label": "Starting analysis",
+            "message": "Analysis request accepted. Preparing the pipeline...",
+        })
+        started_at = time.monotonic()
         while True:
             try:
-                item = q.get(timeout=300)
+                item = q.get(timeout=PIPELINE_HEARTBEAT_SECONDS)
             except queue.Empty:
-                yield _sse("error", {"message": "Pipeline timed out after 5 minutes."})
-                break
+                elapsed = time.monotonic() - started_at
+                if elapsed >= PIPELINE_STREAM_TIMEOUT_SECONDS:
+                    logger.error(
+                        "[%s] Pipeline exceeded stream timeout after %.2fs",
+                        request_id,
+                        elapsed,
+                    )
+                    yield _sse("error", {"message": "Pipeline timed out after 5 minutes."})
+                    break
+
+                logger.warning(
+                    "[%s] No pipeline events for %.2fs; emitting heartbeat",
+                    request_id,
+                    elapsed,
+                )
+                yield _sse("heartbeat", {
+                    "message": "Analysis is still running.",
+                    "elapsed_seconds": round(elapsed, 1),
+                })
+                continue
             if item is None:
                 break
             name, data = item
             yield _sse(name, data)
+
+        logger.info("[%s] SSE stream closed", request_id)
 
     return Response(
         stream_with_context(generate()),
