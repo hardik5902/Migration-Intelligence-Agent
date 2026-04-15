@@ -196,26 +196,3 @@ adk web   # from the project root, uses agent.py → root_agent
 ```bash
 uv run python main.py query "Compare healthcare in Germany, Japan and Canada"
 ```
-
-
-
-## Data & cache
-
-- **DuckDB file:** `cache/migration_intel.duckdb` (override with `DUCKDB_PATH` env var)
-- **Cache viewer:** visit `/cache` in the browser to inspect cached tables, row counts, and TTL status
-- **Cache clear:** POST to `/cache/clear` or click the button in the cache viewer
-
-| Table | TTL | Source |
-|-------|-----|--------|
-| `economic_indicators` | 24h | World Bank API |
-| `employment_data` | 24h | ILOSTAT |
-| `city_scores` | 24h | Teleport API |
-| `climate_data` | 7 days | Open-Meteo Archive |
-| `aqi_data` | 2h | OpenAQ + World Bank PM2.5 |
-| `conflict_events` | 4h | ACLED API |
-| `news_articles` | 1h | NewsAPI |
-
-
-## License
-
-See `LICENSE`.
