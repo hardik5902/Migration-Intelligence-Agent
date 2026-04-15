@@ -6,7 +6,7 @@
     <title>Migration Intelligence Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,300;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   </head>
@@ -15,97 +15,101 @@
 
       <!-- ── Hero ─────────────────────────────────────────────────────────── -->
       <header class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Migration Intelligence Agent</p>
-          <h1>Country comparison powered by live data.</h1>
-          <p class="lede">
-            Ask a question about countries, migration, or quality of life.
-            The AI selects the right data tools, fetches live data for the K
-            best countries, builds 4 comparison charts, and delivers
-            3 evidence-backed insights.
-          </p>
+        <div class="hero-grid">
+
+          <!-- Top strip: issue line + monogram -->
+          <div class="hero-top">
+            <span class="hero-monogram">M<span>·</span>I<span>·</span>A</span>
+          </div>
+
+          <!-- Main title block -->
+          <div class="hero-main">
+            <div class="hero-title-wrap">
+              <div class="hero-title-art" aria-hidden="true"></div>
+              <h1 class="hero-title">
+                <span class="hero-title-line">Migration Intelligence</span>
+                <span class="hero-title-line hero-title-accent">Agent</span>
+              </h1>
+            </div>
+            <span class="hero-kicker">Country Comparison Workspace</span>
+          </div>
+
+          <!-- Sources list (right column, minimal text) -->
+          <aside class="hero-sources">
+            <p class="hero-sources-label">Sourced From</p>
+            <ul class="source-list">
+              <li>World Bank</li>
+              <li>ACLED</li>
+              <li>Open-Meteo</li>
+              <li>OpenAQ</li>
+              <li>News &middot; GDELT</li>
+              <li>ILO &middot; Employment</li>
+            </ul>
+          </aside>
+
         </div>
       </header>
-
-      <!-- ── Tools showcase ───────────────────────────────────────────────── -->
-      <section class="tools-section">
-        <div class="section-heading">
-          <p class="eyebrow">Available Data Sources</p>
-          <h2>The AI picks from these tools based on your query</h2>
-        </div>
-        <div class="tools-grid">
-          {% for tool in tool_cards %}
-          <article class="tool-card">
-            <span class="tool-icon">{{ tool.icon }}</span>
-            <div class="tool-info">
-              <strong>{{ tool.name }}</strong>
-              <p>{{ tool.description }}</p>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-      </section>
 
       <!-- ── Query panel ───────────────────────────────────────────────────── -->
       <section class="query-panel">
         <form id="analyze-form">
-          <label for="query">Ask about countries, migration, or quality of life</label>
+          <p class="query-label">What would you like to compare?</p>
           <textarea
             id="query"
             name="query"
             rows="4"
-            placeholder="e.g. Which 5 countries have the best quality of life for migrants?&#10;e.g. Compare economic stability in Germany, Canada and Australia&#10;e.g. Top 3 safest countries with clean air for relocation"
+            placeholder="e.g. Which countries are safest for families relocating from the US?&#10;e.g. Compare healthcare and cost of living in Germany, Canada and Portugal&#10;e.g. Best countries for remote workers prioritising clean air and stability"
           ></textarea>
+
+          <!-- Priority chips -->
+          <div class="priority-chips">
+            <span class="priority-label">Focus on:</span>
+            <span class="priority-chip" data-topic="safety">Safety</span>
+            <span class="priority-chip" data-topic="healthcare">Healthcare</span>
+            <span class="priority-chip" data-topic="jobs">Jobs</span>
+            <span class="priority-chip" data-topic="education">Education</span>
+            <span class="priority-chip" data-topic="environment">Environment</span>
+            <span class="priority-chip" data-topic="cost of living">Cost of living</span>
+          </div>
+
           <div class="query-footer">
-            <button type="submit" class="run-btn" id="run-btn">Run Analysis</button>
+            <button type="submit" class="run-btn" id="run-btn">Compare Countries</button>
             <p class="query-hint">
-              Mention a number like <em>"top 3"</em> or <em>"compare 7 countries"</em> to set K
-              (default: 5). The AI chooses data sources automatically.
+              You can compare specific countries or ask for the strongest options based on your priorities.
             </p>
           </div>
         </form>
         <div id="error-box" class="error-box hidden"></div>
       </section>
 
-      <!-- ── Loading panel (shown while streaming) ─────────────────────────── -->
+      <!-- ── Loading panel ─────────────────────────────────────────────────── -->
       <section id="loading-panel" class="loading-panel hidden">
-        <p class="eyebrow">Running Analysis</p>
-        <div class="pipeline-steps">
-          <div class="ps-item ps-pending" id="ps-1">
-            <div class="ps-dot"></div>
-            <div class="ps-text">
-              <strong>AI selects tools &amp; countries</strong>
-              <span class="ps-msg">Waiting…</span>
+        <div class="loading-card">
+          <p class="eyebrow" style="text-align:center">Building your comparison</p>
+          <div class="pipeline-steps">
+            <div class="ps-item ps-pending" id="ps-1">
+              <div class="ps-dot"></div>
+              <div class="ps-text">
+                <strong>Understanding your question</strong>
+                <span class="ps-msg">Waiting…</span>
+              </div>
+            </div>
+            <div class="ps-item ps-pending" id="ps-2">
+              <div class="ps-dot"></div>
+              <div class="ps-text">
+                <strong>Checking trusted data sources</strong>
+                <span class="ps-msg">Waiting…</span>
+              </div>
+            </div>
+            <div class="ps-item ps-pending" id="ps-3">
+              <div class="ps-dot"></div>
+              <div class="ps-text">
+                <strong>Building your country comparison</strong>
+                <span class="ps-msg">Waiting…</span>
+              </div>
             </div>
           </div>
-          <div class="ps-item ps-pending" id="ps-2">
-            <div class="ps-dot"></div>
-            <div class="ps-text">
-              <strong>Collecting live data</strong>
-              <span class="ps-msg">Waiting…</span>
-            </div>
-          </div>
-          <div class="ps-item ps-pending" id="ps-3">
-            <div class="ps-dot"></div>
-            <div class="ps-text">
-              <strong>Exploratory data analysis</strong>
-              <span class="ps-msg">Waiting…</span>
-            </div>
-          </div>
-          <div class="ps-item ps-pending" id="ps-4">
-            <div class="ps-dot"></div>
-            <div class="ps-text">
-              <strong>Building charts &amp; insights</strong>
-              <span class="ps-msg">Waiting…</span>
-            </div>
-          </div>
-          <div class="ps-item ps-pending" id="ps-5">
-            <div class="ps-dot"></div>
-            <div class="ps-text">
-              <strong>Finalising results</strong>
-              <span class="ps-msg">Waiting…</span>
-            </div>
-          </div>
+          <p class="loading-note">Comparisons may take longer when more countries or sources are included.</p>
         </div>
       </section>
 
@@ -123,69 +127,57 @@
         </div>
       </section>
 
-      <!-- ── Results shell (populated progressively by JS) ─────────────────── -->
+      <!-- ── Results shell ─────────────────────────────────────────────────── -->
       <section id="results-shell" class="results-shell hidden">
 
-        <!-- Result header: countries + tools + period -->
+        <!-- 1. Result summary strip -->
         <section id="result-header-panel" class="result-header hidden">
           <div class="result-meta-grid">
             <div class="meta-block">
-              <p class="eyebrow">Countries Analysed</p>
+              <p class="eyebrow">Countries Compared</p>
               <div class="chip-row" id="countries-chips"></div>
             </div>
             <div class="meta-block">
-              <p class="eyebrow">Tools Used</p>
+              <p class="eyebrow">Sources Used</p>
               <div class="chip-row" id="tools-chips"></div>
             </div>
             <div class="meta-block meta-block-narrow">
-              <p class="eyebrow">Period</p>
+              <p class="eyebrow">Time Period</p>
               <strong class="period-label" id="period-label"></strong>
             </div>
           </div>
           <p class="query-focus-text hidden" id="query-focus-text"></p>
-          <!-- Per-country data coverage warnings (shown when some tools returned no data) -->
           <div id="coverage-warnings" class="coverage-warnings hidden"></div>
         </section>
 
-        <!-- Tool status -->
-        <section id="tool-status-panel" class="tool-status-card hidden">
-          <p class="eyebrow">Data Collection Status</p>
-          <div class="tool-status-grid" id="tool-status-grid"></div>
-        </section>
-
-        <!-- EDA findings + EDA charts (populated on "eda" SSE event) -->
+        <!-- 2. Important Signals (EDA findings + EDA charts) -->
         <section id="eda-panel" class="eda-section hidden">
           <div class="section-heading">
-            <p class="eyebrow">Data Patterns</p>
-            <h2>What the numbers reveal</h2>
+            <p class="eyebrow">Important Signals</p>
+            <h2>What stands out in the data</h2>
           </div>
-          <!-- EDA finding cards (growth / anomaly / correlation / volatility) -->
           <div class="eda-findings-grid" id="eda-findings-grid"></div>
-          <!-- EDA-specific charts: heatmap / CAGR bar / anomaly timeline / stats spread -->
           <div id="eda-charts-wrap" class="eda-charts-wrap hidden">
             <p class="eyebrow" style="margin-top:1.5rem">Statistical Charts</p>
             <div class="charts-grid" id="eda-charts-grid"></div>
           </div>
         </section>
 
-        <!-- 4 Charts in 2 × 2 grid -->
+        <!-- 3. Comparison Charts -->
         <section id="charts-panel" class="charts-section hidden">
           <div class="section-heading">
-            <p class="eyebrow">Data Visualisation</p>
-            <h2>Comparative analysis across countries</h2>
+            <p class="eyebrow">Comparison Charts</p>
+            <h2>See how countries differ across the measures that matter here</h2>
           </div>
           <div class="charts-grid" id="charts-grid"></div>
         </section>
 
-        <!-- Hypothesis Report (populated on "evidence" SSE event) -->
+        <!-- 4. What The Evidence Suggests -->
         <section id="evidence-panel" class="hypothesis-section hidden">
           <div class="section-heading">
-            <p class="eyebrow">Hypothesis Report</p>
-            <h2>What the data says — grounded analysis with evidence</h2>
-            <p class="section-desc">
-              Each hypothesis is derived from EDA findings and raw data, not model weights.
-              Specific data points are cited, and each is tested against a competing explanation.
-            </p>
+            <p class="eyebrow">What The Evidence Suggests</p>
+            <h2>Clear takeaways, supporting facts, and important caveats</h2>
+
           </div>
           <div class="hypothesis-list" id="evidence-grid"></div>
         </section>
@@ -207,9 +199,12 @@
       const hide = el => el.classList.add('hidden');
       const $    = id => document.getElementById(id);
 
-      const TOTAL_STEPS = 5;
+      // Map backend pipeline steps (1–5) to 3 display steps
+      const TOTAL_STEPS = 3;
+      const STEP_MAP    = { 1: 1, 2: 1, 3: 2, 4: 3, 5: 3 };
 
-      function setStep(step, msg) {
+      function setStep(backendStep, msg) {
+        const step = STEP_MAP[backendStep] || Math.min(backendStep, TOTAL_STEPS);
         for (let i = 1; i <= TOTAL_STEPS; i++) {
           const el = $(`ps-${i}`);
           if (!el) continue;
@@ -229,7 +224,7 @@
         show(errorBox);
         hide(loadPanel);
         runBtn.disabled = false;
-        runBtn.textContent = 'Run Analysis';
+        runBtn.textContent = 'Compare Countries';
       }
 
       function resetUI() {
@@ -237,24 +232,20 @@
         hide(resShell);
         const oosPanel = $('oos-panel');
         if (oosPanel) hide(oosPanel);
-        // Reset all panels inside results-shell
-        ['result-header-panel','tool-status-panel','eda-panel',
+        ['result-header-panel','eda-panel',
          'eda-charts-wrap','charts-panel','evidence-panel']
           .forEach(id => { const el = $(id); if (el) hide(el); });
-        // Clear dynamic content
-        $('countries-chips').innerHTML = '';
-        $('tools-chips').innerHTML = '';
-        $('period-label').textContent = '';
+        $('countries-chips').innerHTML  = '';
+        $('tools-chips').innerHTML      = '';
+        $('period-label').textContent   = '';
         $('query-focus-text').textContent = '';
         hide($('query-focus-text'));
         const covWarn = $('coverage-warnings');
         if (covWarn) { covWarn.innerHTML = ''; hide(covWarn); }
-        $('tool-status-grid').innerHTML = '';
         $('eda-findings-grid').innerHTML = '';
-        $('eda-charts-grid').innerHTML = '';
-        $('charts-grid').innerHTML = '';
-        $('evidence-grid').innerHTML = '';
-        // Reset step indicators
+        $('eda-charts-grid').innerHTML   = '';
+        $('charts-grid').innerHTML       = '';
+        $('evidence-grid').innerHTML     = '';
         for (let i = 1; i <= TOTAL_STEPS; i++) {
           const el = $(`ps-${i}`);
           if (!el) continue;
@@ -264,14 +255,27 @@
         }
       }
 
+      // ── Priority chips — append topic to textarea ─────────────────────────
+      document.querySelectorAll('.priority-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const topic   = chip.dataset.topic;
+          const textarea = $('query');
+          const current  = textarea.value.trim();
+          if (!current) {
+            textarea.value = `Compare countries with a focus on ${topic}`;
+          } else if (!current.toLowerCase().includes(topic)) {
+            textarea.value = current.replace(/[,.]?\s*$/, '') + `, focusing on ${topic}`;
+          }
+          textarea.focus();
+        });
+      });
+
       // ── SSE event handlers ─────────────────────────────────────────────────
       function onStage(d) {
         setStep(d.step, d.message);
       }
 
       function onSelection(d) {
-        // Populate header immediately when we know countries + tools
-        // Clear first to prevent duplication when selection is re-emitted after filtering
         const countriesEl = $('countries-chips');
         countriesEl.innerHTML = '';
         d.countries.forEach(c => {
@@ -298,7 +302,7 @@
           show(qf);
         }
 
-        // Proxy note — shown below query focus when niche topic uses proxy indicators
+        // Proxy note
         if (d.proxy_note && d.proxy_note.trim()) {
           const existing = $('proxy-note-box');
           const box = existing || document.createElement('p');
@@ -311,12 +315,11 @@
           box.classList.remove('hidden');
         }
 
-        // Per-country coverage warnings
+        // Coverage warnings — warm, plain-language text
         const covEl = $('coverage-warnings');
         covEl.innerHTML = '';
         const ranking = d.coverage_ranking || [];
-        const tools = d.tools || [];
-        // Build warnings only for countries with partial coverage
+        const tools   = d.tools || [];
         const warnings = [];
         ranking.forEach(item => {
           const missingTools = tools.filter(t => (item.per_tool || {})[t] === 0);
@@ -329,7 +332,7 @@
         if (warnings.length > 0) {
           const intro = document.createElement('p');
           intro.className = 'coverage-intro';
-          intro.textContent = 'Partial data — some tools returned no data for:';
+          intro.textContent = 'Some comparisons are based on fewer sources than others.';
           covEl.appendChild(intro);
           const row = document.createElement('div');
           row.className = 'coverage-chips-row';
@@ -341,6 +344,10 @@
             row.appendChild(chip);
           });
           covEl.appendChild(row);
+          const note = document.createElement('p');
+          note.className = 'coverage-note';
+          note.textContent = 'Use these results as directional where coverage is partial.';
+          covEl.appendChild(note);
           show(covEl);
         } else {
           hide(covEl);
@@ -355,10 +362,10 @@
         show($('oos-panel'));
         hide(loadPanel);
         runBtn.disabled = false;
-        runBtn.textContent = 'Run Analysis';
+        runBtn.textContent = 'Compare Countries';
       }
 
-      // ── EDA type → icon + colour class ────────────────────────────────────────
+      // ── EDA type → tag + colour class ─────────────────────────────────────
       const EDA_META = {
         growth:      { tag: 'Growth',      cls: 'eda-growth'      },
         anomaly:     { tag: 'Outlier',     cls: 'eda-anomaly'     },
@@ -368,8 +375,6 @@
 
       function onEda(d) {
         const findings = d.findings || [];
-
-        // ── Finding cards ──────────────────────────────────────────────────────
         const grid = $('eda-findings-grid');
         grid.innerHTML = '';
         if (findings.length) {
@@ -389,8 +394,6 @@
           show($('eda-panel'));
           show(resShell);
         }
-
-        // EDA charts may arrive in the same event (legacy) or via separate eda_charts event
         const edaCharts = d.eda_charts || [];
         if (edaCharts.length) renderEdaCharts(edaCharts);
       }
@@ -441,28 +444,14 @@
       }
 
       function onEvidence(d) {
-        // ── Tool status badges ─────────────────────────────────────────────
-        const tsGrid = $('tool-status-grid');
-        tsGrid.innerHTML = '';
-        (d.tools_used || []).forEach(tool => {
-          const rows = (d.tool_stats || {})[tool] || 0;
-          const item = document.createElement('div');
-          item.className = `tool-status-item ${rows > 0 ? 'ts-ok' : 'ts-empty'}`;
-          item.innerHTML = `
-            <span class="ts-name">${tool}</span>
-            <span class="ts-badge">${rows > 0 ? `✓ ${rows} rows` : '⚠ no data'}</span>`;
-          tsGrid.appendChild(item);
-        });
-        if (d.tools_used && d.tools_used.length) show($('tool-status-panel'));
-
-        // ── Hypothesis cards ───────────────────────────────────────────────
-        const list = $('evidence-grid');
+        // Evidence cards
+        const list  = $('evidence-grid');
         list.innerHTML = '';
         const items = d.hypotheses || d.evidences || [];
         items.forEach((h, i) => {
           const conf      = h.confidence ?? 50;
           const confClass = conf >= 80 ? 'conf-high' : conf >= 60 ? 'conf-med' : 'conf-low';
-          const confLabel = conf >= 80 ? 'High' : conf >= 60 ? 'Medium' : 'Low';
+          const confLabel = conf >= 80 ? 'High'      : conf >= 60 ? 'Medium'   : 'Low';
 
           const hasCompeting = h.competing_hypothesis && h.competing_hypothesis.trim();
 
@@ -492,11 +481,11 @@
 
             <div class="hyp-evidence-grid">
               <div class="hyp-evidence-col hyp-for">
-                <p class="hyp-col-label">✓ Supporting</p>
+                <p class="hyp-col-label">Facts supporting this</p>
                 <div class="ev-chips">${(h.evidence_for || []).map(e => `<span class="ev-chip ev-chip-for">${e}</span>`).join('')}</div>
               </div>
               <div class="hyp-evidence-col hyp-against">
-                <p class="hyp-col-label">✗ Caveats</p>
+                <p class="hyp-col-label">Worth keeping in mind</p>
                 <div class="ev-chips">${(h.evidence_against || []).map(e => `<span class="ev-chip ev-chip-against">${e}</span>`).join('')}</div>
               </div>
             </div>
@@ -525,7 +514,7 @@
         if (lastStep) lastStep.querySelector('.ps-msg').textContent = 'Complete!';
         setTimeout(() => hide(loadPanel), 1200);
         runBtn.disabled = false;
-        runBtn.textContent = 'Run Analysis';
+        runBtn.textContent = 'Compare Countries';
       }
 
       // ── SSE stream reader ──────────────────────────────────────────────────
@@ -541,9 +530,9 @@
           return;
         }
 
-        const reader = response.body.getReader();
+        const reader  = response.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = '';
+        let buffer    = '';
 
         while (true) {
           let chunk;
@@ -557,9 +546,8 @@
 
           buffer += decoder.decode(chunk.value, { stream: true });
 
-          // Split on double-newline (SSE event boundary)
           const events = buffer.split('\n\n');
-          buffer = events.pop(); // keep incomplete tail
+          buffer = events.pop();
 
           for (const rawEvent of events) {
             if (!rawEvent.trim()) continue;
@@ -589,20 +577,20 @@
         }
       }
 
-      // ── Form submit intercept ──────────────────────────────────────────────
+      // ── Form submit ────────────────────────────────────────────────────────
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const query = ($('query').value || '').trim();
         if (!query) {
-          showError('Please enter a question before running the analysis.');
+          showError('Please enter a question before starting the comparison.');
           return;
         }
 
         resetUI();
         show(loadPanel);
         runBtn.disabled = true;
-        runBtn.textContent = 'Running…';
-        setStep(1, 'Analysing your query…');
+        runBtn.textContent = 'Comparing…';
+        setStep(1, 'Reading your question…');
 
         await runAnalysis(query);
       });
