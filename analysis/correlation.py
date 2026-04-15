@@ -110,7 +110,13 @@ def run_growth_rate(series: list[float], years: list[int]) -> dict[str, Any]:
     peak_idx = int(np.nanargmax(g)) + 1 if np.any(~np.isnan(g)) else None
     trough_idx = int(np.nanargmin(g)) + 1 if np.any(~np.isnan(g)) else None
     years_total = max(int(y[-1] - y[0]), 1)
-    cagr = (float(s[-1] / s[0]) ** (1.0 / years_total)) - 1.0 if s[0] not in (0, np.nan) else None
+    # CAGR requires same-sign start/end; negative base ** fraction = complex in Python
+    start, end = s[0], s[-1]
+    if start == 0 or np.isnan(start) or start * end <= 0:
+        cagr = None
+    else:
+        ratio = float(end / start)
+        cagr = (ratio ** (1.0 / years_total)) - 1.0
     return {
         "cagr": float(cagr) if cagr is not None and not np.isnan(cagr) else None,
         "peak_growth_year": int(y[peak_idx]) if peak_idx is not None else None,

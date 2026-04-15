@@ -41,13 +41,46 @@ def run_pattern_detective(
 
     tone = float(dataset.gdelt.get("avg_tone") or 0.0)
     lag_news = None
-    if len(y_main) >= 6:
-        tone_series = [tone + (i % 3) * 0.1 for i in range(len(y_main))]
-        lag_news = run_lag_analysis(tone_series, y_main)
+    timeline = dataset.gdelt.get("timeline") or []
+    if len(y_main) >= 6 and isinstance(timeline, list):
+        tone_by_year: dict[int, list[float]] = {}
+        for item in timeline:
+            if not isinstance(item, dict):
+                continue
+            date_text = str(item.get("date") or "")
+            if len(date_text) < 4:
+                continue
+            try:
+                year = int(date_text[:4])
+                tone_val = float(item.get("tone"))
+            except Exception:
+                continue
+            tone_by_year.setdefault(year, []).append(tone_val)
+        tone_series = []
+        migration_series = []
+        for year, value in zip(years_main, y_main):
+            year_tones = tone_by_year.get(year)
+            if not year_tones:
+                continue
+            tone_series.append(sum(year_tones) / len(year_tones))
+            migration_series.append(value)
+        if len(tone_series) >= 4 and len(migration_series) >= 4:
+            lag_news = run_lag_analysis(tone_series, migration_series)
 
     template = "conflict_displacement"
     if sim_zw is not None and sim_sy is not None:
         template = "economic_collapse" if sim_zw > sim_sy else "conflict_displacement"
+    if sim_sy is None and sim_zw is None:
+        return PatternResult(
+            template="insufficient_evidence",
+            similarity_to_syria=None,
+            similarity_to_zimbabwe=None,
+            news_lead_months=None,
+            narrative=(
+                "Historical pattern matching could not be established because comparable "
+                "displacement baselines were not available in the retrieved data."
+            ),
+        )
 
     return PatternResult(
         template=template,

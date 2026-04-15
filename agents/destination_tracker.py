@@ -24,8 +24,17 @@ def run_destination_tracker(
     intent: IntentConfig,
 ) -> DestinationResult:
     dests = dataset.destinations or []
+    
     if not dests:
-        return DestinationResult(narrative="No UNHCR destination breakdown available.")
+        # Provide context about why destination data is missing
+        missing_msg = "No UNHCR destination breakdown was available to identify top destinations."
+        if "no_displacement_data" in (dataset.missing_reasons or []):
+            missing_msg += " (Displacement data was not collected or is unavailable for this country.)"
+        
+        return DestinationResult(
+            narrative=missing_msg,
+            anomaly_note="Destination tracking requires UNHCR population data which was not available.",
+        )
     df = pd.DataFrame(dests).sort_values("refugee_count", ascending=False).head(10)
     origin = dataset.country_code.upper()[:3]
     ocap = _CAPS.get(origin, (10.0, 0.0))
@@ -52,10 +61,29 @@ def run_destination_tracker(
 
     top = scored[0].country if scored else ""
     anomaly = ""
+    target = (intent.target_country or dataset.target_country or "").strip()
     if len(scored) >= 2:
         anomaly = (
             f"{top} leads absorption ({scored[0].share_of_outflow:.0%} of tracked flow in this slice) "
             f"while secondary hubs differ in distance and income context — validate with GDP join in production."
+        )
+    if target:
+        target_match = next((row for row in scored if row.country.lower() == target.lower()), None)
+        if target_match is None:
+            return DestinationResult(
+                top_destinations=scored,
+                anomaly_note=(
+                    f"Requested destination '{target}' does not appear in the observed destination breakdown "
+                    f"for {dataset.country or intent.country}. The data does not support a meaningful migration corridor."
+                ),
+                narrative=(
+                    f"No material UNHCR-style destination evidence found for the route "
+                    f"{dataset.country or intent.country} → {target}."
+                ),
+            )
+        anomaly = (
+            f"Requested destination '{target}' is present but not dominant, representing "
+            f"{target_match.share_of_outflow:.0%} of the tracked outflow."
         )
 
     return DestinationResult(

@@ -1,132 +1,321 @@
-"""Streamlit UI for the Migration Intelligence Agent (Google ADK + Gemini)."""
+"""Flask frontend for the Migration Intelligence — Country Comparison pipeline."""
 
 from __future__ import annotations
 
-import asyncio
 import json
+import logging
 import os
+import queue
+import threading
+import time
+import uuid
 from pathlib import Path
+from typing import Any
 
-import plotly.io as pio
-import streamlit as st
 from dotenv import load_dotenv
+from flask import Flask, Response, render_template, request, stream_with_context
 
-from agents.orchestrator import run_migration_pipeline
-from analysis.visualization import build_migration_panels
-from models.schemas import HypothesisReport
+from agents.country_pipeline import run_country_pipeline_streaming
+from agents.query_guard import check_query
+from tools.duckdb_tools import _ALLOWED_TABLES, _TTL_HOURS, _connect, db_path
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 
-st.set_page_config(page_title="Migration Intelligence Agent", layout="wide")
-st.title("Migration Intelligence Agent")
-st.caption("Google ADK · Gemini · live UNHCR / World Bank / Open-Meteo / OpenAQ / News / GDELT (+ optional ACLED, NewsAPI)")
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
 
-with st.sidebar:
-    st.subheader("Controls")
-    year_from = st.slider("Year from", 2000, 2024, 2010)
-    year_to = st.slider("Year to", 2000, 2025, 2023)
-    override = st.text_input("Intent override (optional)", "")
-    aqi_w = st.slider("Relocation weight: AQI", 0.0, 1.0, 0.4)
-    health_w = st.slider("Relocation weight: healthcare", 0.0, 1.0, 0.35)
-    edu_w = st.slider("Relocation weight: education", 0.0, 1.0, 0.25)
+logger = logging.getLogger(__name__)
 
-query = st.text_area(
-    "Your question",
-    value="Why are people leaving Venezuela?",
-    height=100,
-)
+PIPELINE_HEARTBEAT_SECONDS = int(os.environ.get("PIPELINE_HEARTBEAT_SECONDS", "15"))
+PIPELINE_STREAM_TIMEOUT_SECONDS = int(os.environ.get("PIPELINE_STREAM_TIMEOUT_SECONDS", "300"))
 
-if st.button("Run pipeline", type="primary"):
-    # Check for either Vertex AI or direct API key auth
-    has_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE" and os.environ.get("GOOGLE_CLOUD_PROJECT")
-    has_api_key = os.environ.get("GOOGLE_API_KEY")
-    
-    if not (has_vertex_ai or has_api_key):
-        st.error("Configure authentication: set GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI in `.env` (for Vertex AI) OR set GOOGLE_API_KEY (for direct API). See `.env.example`.")
-    else:
-        hint = query.strip()
-        hint = (
-            f"{hint}\n\n[Context: analysis years {year_from}-{year_to}. "
-            f"Relocation weights if applicable — aqi:{aqi_w}, healthcare:{health_w}, education:{edu_w}]"
+app = Flask(__name__)
+
+# Tool metadata shown in the UI
+TOOL_CARDS = [
+    {
+        "id": "worldbank",
+        "name": "World Bank",
+        "icon": "📊",
+        "description": "GDP growth, inflation, health & education spending, poverty, political stability",
+    },
+    {
+        "id": "employment",
+        "name": "ILO Labor",
+        "icon": "💼",
+        "description": "Unemployment rates, youth unemployment, labour force participation",
+    },
+    {
+        "id": "environment",
+        "name": "Environment",
+        "icon": "🌿",
+        "description": "Climate trends (temperature, precipitation) + PM2.5 air quality — combined",
+    },
+    {
+        "id": "acled",
+        "name": "ACLED",
+        "icon": "⚔️",
+        "description": "Armed conflict events, fatalities, and crisis locations",
+    },
+    {
+        "id": "news",
+        "name": "News Summary",
+        "icon": "📰",
+        "description": "Recent news events summarised around your query topic per country",
+    },
+]
+
+
+def _auth_ready() -> bool:
+    has_vertex = (
+        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "TRUE"
+        and os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    return bool(
+        has_vertex
+        or os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
+
+
+def _sse(event_name: str, data: Any) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _summarize_event(name: str, data: Any) -> str:
+    if not isinstance(data, dict):
+        return str(data)
+    if name == "stage":
+        return data.get("label") or data.get("message") or "stage update"
+    if name == "selection":
+        return (
+            f"countries={len(data.get('countries') or [])}, "
+            f"tools={len(data.get('tools') or [])}"
         )
-        if override.strip():
-            hint = f"{hint}\n\n(User intent override: {override.strip()})"
-        with st.spinner("Collecting data…"):
-            pass
-        with st.spinner("Running ADK pipeline (intent → scout → EDA → hypothesis)…"):
-            try:
+    if name in {"charts", "eda_charts"}:
+        key = "charts" if name == "charts" else "eda_charts"
+        return f"{key}={len(data.get(key) or [])}"
+    if name == "evidence":
+        return f"hypotheses={len(data.get('hypotheses') or [])}"
+    return data.get("message") or data.get("reason") or "event received"
 
-                async def _run():
-                    return await run_migration_pipeline(
-                        hint,
-                        year_from=year_from,
-                        year_to=year_to,
+
+@app.get("/")
+def index() -> str:
+    return render_template("index.html", tool_cards=TOOL_CARDS)
+
+
+@app.post("/analyze")
+def analyze() -> Response:
+    query = (request.form.get("query") or "").strip()
+    request_id = uuid.uuid4().hex[:8]
+
+    logger.info("[%s] /analyze received query_length=%s", request_id, len(query))
+
+    if not query:
+        def _err():
+            yield _sse("error", {"message": "Please enter a question before running the analysis."})
+        logger.warning("[%s] Rejecting empty query", request_id)
+        return Response(stream_with_context(_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    _safe, _reason = check_query(query)
+    if not _safe:
+        def _injection_err(_reason=_reason):
+            yield _sse("out_of_scope", {"reason": _reason})
+        logger.warning("[%s] Query blocked by guard: %s", request_id, _reason)
+        return Response(stream_with_context(_injection_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    if not _auth_ready():
+        def _auth_err():
+            yield _sse("error", {"message": (
+                "Authentication not configured. "
+                "Set GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS in your .env file."
+            )})
+        logger.error("[%s] Authentication is not configured", request_id)
+        return Response(stream_with_context(_auth_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    q: queue.Queue = queue.Queue()
+
+    def emit(name: str, data: Any) -> None:
+        logger.info("[%s] Pipeline event=%s %s", request_id, name, _summarize_event(name, data))
+        q.put((name, data))
+
+    def _run_pipeline() -> None:
+        import asyncio as _asyncio
+        started_at = time.monotonic()
+        logger.info("[%s] Background pipeline thread started", request_id)
+        try:
+            _asyncio.run(run_country_pipeline_streaming(query, emit))
+        except Exception as exc:
+            logger.exception("[%s] Pipeline execution failed", request_id)
+            q.put(("error", {"message": str(exc)}))
+        finally:
+            duration = time.monotonic() - started_at
+            logger.info("[%s] Background pipeline thread finished in %.2fs", request_id, duration)
+            q.put(None)  # sentinel — tells the generator to stop
+
+    threading.Thread(target=_run_pipeline, daemon=True).start()
+
+    def generate():
+        logger.info("[%s] SSE stream opened", request_id)
+        yield _sse("stage", {
+            "step": 0,
+            "total": 5,
+            "label": "Starting analysis",
+            "message": "Analysis request accepted. Preparing the pipeline...",
+        })
+        started_at = time.monotonic()
+        while True:
+            try:
+                item = q.get(timeout=PIPELINE_HEARTBEAT_SECONDS)
+            except queue.Empty:
+                elapsed = time.monotonic() - started_at
+                if elapsed >= PIPELINE_STREAM_TIMEOUT_SECONDS:
+                    logger.error(
+                        "[%s] Pipeline exceeded stream timeout after %.2fs",
+                        request_id,
+                        elapsed,
                     )
+                    yield _sse("error", {"message": "Pipeline timed out after 5 minutes."})
+                    break
 
-                state = asyncio.run(_run())
-            except Exception as exc:
-                st.exception(exc)
-                state = {}
+                logger.warning(
+                    "[%s] No pipeline events for %.2fs; emitting heartbeat",
+                    request_id,
+                    elapsed,
+                )
+                yield _sse("heartbeat", {
+                    "message": "Analysis is still running.",
+                    "elapsed_seconds": round(elapsed, 1),
+                })
+                continue
+            if item is None:
+                break
+            name, data = item
+            yield _sse(name, data)
 
-        md_raw = state.get("migration_dataset")
-        if isinstance(md_raw, dict):
+        logger.info("[%s] SSE stream closed", request_id)
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/cache")
+def cache_viewer() -> str:
+    """Browser-based DuckDB cache inspector."""
+    from datetime import datetime, timezone, timedelta
+
+    try:
+        con = _connect()
+        tables_info: list[dict[str, Any]] = []
+
+        for table in sorted(_ALLOWED_TABLES):
+            ttl_hours = _TTL_HOURS.get(table, 24)
             try:
-                fig_json = build_migration_panels(md_raw)
-                fig = pio.from_json(fig_json)
-                st.subheader("Exploratory panels")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as exc:
-                st.warning(f"Chart build skipped: {exc}")
-
-        hyp_raw = state.get("hypothesis_report")
-        if hyp_raw:
-            try:
-                hyp = HypothesisReport.model_validate(hyp_raw)
+                total = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             except Exception:
-                hyp = None
-            if hyp:
-                st.subheader("Headline")
-                st.write(hyp.headline)
-                st.metric("Confidence", f"{hyp.confidence_score:.2f}")
-                if hyp.supporting_points:
-                    st.subheader("Supporting points")
-                    st.dataframe(
-                        [p.model_dump() for p in hyp.supporting_points],
-                        use_container_width=True,
-                    )
-                if hyp.citations:
-                    st.subheader("Citations")
-                    st.dataframe(
-                        [c.model_dump() for c in hyp.citations],
-                        use_container_width=True,
-                    )
-                if hyp.competing_hypotheses:
-                    st.subheader("Competing hypotheses")
-                    for ch in hyp.competing_hypotheses:
-                        with st.expander(ch.hypothesis):
-                            st.write("For:", ch.evidence_for)
-                            st.write("Against:", ch.evidence_against)
-                            st.caption(f"p={ch.probability_score:.2f}")
-                if hyp.recent_headlines:
-                    st.subheader("Headlines")
-                    for n in hyp.recent_headlines[:5]:
-                        st.markdown(f"**{n.title}** — _{n.source}_ ({n.sentiment_score:.2f})")
-                if hyp.charts:
-                    for panel in hyp.charts:
+                total = 0
+
+            # Per-country summary
+            try:
+                rows = con.execute(
+                    f"SELECT country, COUNT(*) as rows FROM {table} GROUP BY country ORDER BY country"
+                ).fetchdf().to_dict(orient="records")
+            except Exception:
+                rows = []
+
+            # Cache meta entries for this table
+            try:
+                meta = con.execute(
+                    "SELECT cache_key, fetched_at FROM cache_meta WHERE table_name=? ORDER BY fetched_at DESC",
+                    [table],
+                ).fetchdf().to_dict(orient="records")
+            except Exception:
+                meta = []
+
+            # Annotate each meta entry with TTL status
+            now = datetime.now(timezone.utc)
+            for m in meta:
+                fetched = m.get("fetched_at")
+                if fetched:
+                    if isinstance(fetched, str):
                         try:
-                            st.plotly_chart(pio.from_json(panel.fig_json), use_container_width=True)
-                            st.caption(panel.caption)
+                            fetched = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
                         except Exception:
-                            pass
-                with st.expander("Full HypothesisReport JSON"):
-                    st.json(json.loads(hyp.model_dump_json()))
-        else:
-            st.info("No hypothesis_report in session state (pipeline may have failed early).")
+                            fetched = None
+                    if fetched:
+                        if getattr(fetched, "tzinfo", None) is None:
+                            fetched = fetched.replace(tzinfo=timezone.utc)
+                        age = now - fetched
+                        remaining = timedelta(hours=ttl_hours) - age
+                        m["age_min"] = int(age.total_seconds() / 60)
+                        m["valid"] = remaining.total_seconds() > 0
+                        m["expires_in"] = (
+                            f"{int(remaining.total_seconds()//3600)}h {int((remaining.total_seconds()%3600)//60)}m"
+                            if m["valid"] else "expired"
+                        )
+                    else:
+                        m["valid"] = False
+                        m["expires_in"] = "unknown"
+                        m["age_min"] = "?"
+                else:
+                    m["valid"] = False
+                    m["expires_in"] = "unknown"
+                    m["age_min"] = "?"
 
-        with st.expander("Session state keys"):
-            st.json({k: type(v).__name__ for k, v in state.items()})
+            tables_info.append({
+                "name": table,
+                "total_rows": total,
+                "ttl_hours": ttl_hours,
+                "country_rows": rows,
+                "meta": meta,
+            })
 
-st.markdown(
-    "---\nWeights from sidebar are passed into the query string when you use "
-    "**relocation** phrasing so the intent agent can pick them up."
-)
+        # Sample rows for quick inspection (last table the user might query)
+        samples: dict[str, list] = {}
+        for table in sorted(_ALLOWED_TABLES):
+            try:
+                s = con.execute(f"SELECT * FROM {table} LIMIT 5").fetchdf().to_dict(orient="records")
+                if s:
+                    samples[table] = s
+            except Exception:
+                pass
+
+        error = None
+    except Exception as exc:
+        tables_info = []
+        samples = {}
+        error = str(exc)
+
+    return render_template(
+        "cache.html",
+        tables=tables_info,
+        samples=samples,
+        db_path=db_path(),
+        error=error,
+    )
+
+
+@app.post("/cache/clear")
+def cache_clear() -> Response:
+    """Drop all rows from every cache table and reset cache_meta."""
+    from flask import redirect, url_for
+    try:
+        con = _connect()
+        for table in _ALLOWED_TABLES:
+            con.execute(f"DELETE FROM {table}")
+        con.execute("DELETE FROM cache_meta")
+    except Exception:
+        pass
+    return redirect(url_for("cache_viewer"))
+
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=8000, debug=True)

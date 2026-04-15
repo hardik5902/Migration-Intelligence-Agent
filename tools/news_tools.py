@@ -32,7 +32,7 @@ async def get_country_news(
         "apiKey": key,
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=10.0)
     rows: list[dict[str, Any]] = []
     built = NEWS_EVERYTHING
     try:
@@ -70,15 +70,15 @@ async def get_gdelt_sentiment(
     country_query: str,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Aggregate tone from GDELT doc API (no key)."""
+    """Aggregate tone and timeline from GDELT doc API (no key)."""
     params = {
         "query": country_query,
-        "mode": "timelinevolraw",
+        "mode": "artlist",
         "maxrecords": 50,
         "format": "json",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=45.0)
+    c = client or httpx.AsyncClient(timeout=10.0)
     out: dict[str, Any] = {
         "avg_tone": 0.0,
         "article_count": 0,
@@ -91,16 +91,32 @@ async def get_gdelt_sentiment(
         data = r.json()
         built = str(r.request.url)
         tones: list[float] = []
-        timeline = data.get("timeline", data)
-        if isinstance(timeline, dict):
-            for v in timeline.values():
-                if isinstance(v, list):
-                    for item in v:
-                        if isinstance(item, dict) and "Tone" in item:
-                            tones.append(float(item["Tone"]))
+        timeline_rows: list[dict[str, Any]] = []
+        articles = data.get("articles", []) if isinstance(data, dict) else []
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            tone_raw = article.get("tone")
+            try:
+                tone = float(tone_raw)
+            except Exception:
+                tone = None
+            if tone is not None:
+                tones.append(tone)
+            date_key = str(article.get("seendate") or article.get("date") or "")[:8]
+            if date_key:
+                timeline_rows.append(
+                    {
+                        "date": date_key,
+                        "tone": tone,
+                        "source": article.get("domain", ""),
+                        "title": article.get("title", ""),
+                    }
+                )
         if tones:
             out["avg_tone"] = sum(tones) / len(tones)
             out["article_count"] = len(tones)
+        out["timeline"] = timeline_rows
         out["source_api"] = "GDELT API"
         out["endpoint_url"] = built
         out["fetched_at"] = datetime.now(timezone.utc).isoformat()

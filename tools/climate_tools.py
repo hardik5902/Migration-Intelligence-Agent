@@ -75,7 +75,7 @@ async def get_climate_data(
         "daily": "temperature_2m_max,precipitation_sum",
     }
     own = client is None
-    c = client or httpx.AsyncClient(timeout=90.0)
+    c = client or httpx.AsyncClient(timeout=12.0)
     rows: list[dict[str, Any]] = []
     built = ARCHIVE
     try:
@@ -107,6 +107,11 @@ async def get_climate_data(
                     "fetched_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+        if rows:
+            baseline = sum(row["avg_daily_max_temp_c"] for row in rows) / len(rows)
+            for row in rows:
+                row["avg_temp_anomaly_c"] = row["avg_daily_max_temp_c"] - baseline
+                row["extreme_heat_days"] = 0
     except Exception:
         rows = []
     finally:

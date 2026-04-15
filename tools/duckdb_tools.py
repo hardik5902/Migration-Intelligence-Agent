@@ -90,6 +90,7 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS city_scores (
+            country VARCHAR,
             slug VARCHAR,
             category VARCHAR,
             score_out_of_10 DOUBLE,
@@ -119,6 +120,8 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             year INTEGER,
             avg_daily_max_temp_c DOUBLE,
             annual_precipitation_mm DOUBLE,
+            avg_temp_anomaly_c DOUBLE,
+            extreme_heat_days DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
             cache_key VARCHAR
@@ -131,6 +134,8 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             country VARCHAR,
             year INTEGER,
             unemployment_rate DOUBLE,
+            youth_unemployment_rate DOUBLE,
+            labor_force_participation DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
             cache_key VARCHAR
@@ -142,6 +147,7 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         CREATE TABLE IF NOT EXISTS aqi_data (
             country VARCHAR,
             location VARCHAR,
+            city VARCHAR,
             pm25 DOUBLE,
             endpoint_url VARCHAR,
             fetched_at TIMESTAMP,
@@ -149,13 +155,32 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         );
         """
     )
+    con.execute("ALTER TABLE city_scores ADD COLUMN IF NOT EXISTS country VARCHAR;")
+    con.execute("ALTER TABLE climate_data ADD COLUMN IF NOT EXISTS avg_temp_anomaly_c DOUBLE;")
+    con.execute("ALTER TABLE climate_data ADD COLUMN IF NOT EXISTS extreme_heat_days DOUBLE;")
+    con.execute("ALTER TABLE employment_data ADD COLUMN IF NOT EXISTS youth_unemployment_rate DOUBLE;")
+    con.execute("ALTER TABLE employment_data ADD COLUMN IF NOT EXISTS labor_force_participation DOUBLE;")
+    con.execute("ALTER TABLE aqi_data ADD COLUMN IF NOT EXISTS city VARCHAR;")
+
+
+import threading as _threading
+_thread_local = _threading.local()
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
-    p = db_path()
-    _ensure_parent(p)
-    con = duckdb.connect(p)
-    init_schema(con)
+    """Return a per-thread cached DuckDB connection.
+
+    Each thread (Flask request thread, pipeline thread) gets its own connection
+    so there are no cross-thread safety issues. init_schema runs once per thread
+    instead of on every cache check/write call (was ~60 open+init cycles per query).
+    """
+    con = getattr(_thread_local, "con", None)
+    if con is None:
+        p = db_path()
+        _ensure_parent(p)
+        con = duckdb.connect(p)
+        init_schema(con)
+        _thread_local.con = con
     return con
 
 
@@ -211,31 +236,28 @@ def replace_table_rows(
     """Delete prior rows for cache_key and insert fresh rows."""
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Unknown table: {table}")
-    if not rows:
-        return
     con = _connect()
-    try:
+    # If rows is empty, still update cache_meta so callers know we attempted
+    # a fetch and avoid repeated refetches inside the TTL window.
+    if not rows:
         con.execute(f"DELETE FROM {table} WHERE cache_key = ?", [key])
-        df = pd.DataFrame(rows)
-        for col in columns:
-            if col not in df.columns:
-                df[col] = None
-        df = df[columns]
-        df["cache_key"] = key
-        con.register("_tmp_df", df)
-        con.execute(f"INSERT INTO {table} BY NAME SELECT * FROM _tmp_df")
-        con.unregister("_tmp_df")
         _touch_meta(con, table, key)
-    finally:
-        con.close()
+        return
+    con.execute(f"DELETE FROM {table} WHERE cache_key = ?", [key])
+    df = pd.DataFrame(rows)
+    for col in columns:
+        if col not in df.columns:
+            df[col] = None
+    df = df[columns]
+    df["cache_key"] = key
+    con.register("_tmp_df", df)
+    con.execute(f"INSERT INTO {table} BY NAME SELECT * FROM _tmp_df")
+    con.unregister("_tmp_df")
+    _touch_meta(con, table, key)
 
 
 def should_use_cache(table: str, key: str) -> bool:
-    con = _connect()
-    try:
-        return _ttl_ok(con, table, key)
-    finally:
-        con.close()
+    return _ttl_ok(_connect(), table, key)
 
 
 def run_sql_query(sql: str) -> list[dict[str, Any]]:
@@ -243,8 +265,4 @@ def run_sql_query(sql: str) -> list[dict[str, Any]]:
     lowered = sql.strip().lower()
     if not lowered.startswith("select"):
         raise ValueError("Only SELECT queries are allowed.")
-    con = _connect()
-    try:
-        return con.execute(sql).fetchdf().to_dict(orient="records")
-    finally:
-        con.close()
+    return _connect().execute(sql).fetchdf().to_dict(orient="records")

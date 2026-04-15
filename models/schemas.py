@@ -85,6 +85,18 @@ class ChartPanel(BaseModel):
     data_sources: list[str] = Field(default_factory=list)
 
 
+class ToolCall(BaseModel):
+    tool_name: str
+    params: dict[str, str] = Field(default_factory=dict)
+    from_cache: bool = False
+    started_at: str | None = None
+    finished_at: str | None = None
+    rows_returned: int | None = None
+    endpoint_url: str | None = None
+    source_api: str | None = None
+    error: str | None = None
+
+
 class IntentConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -97,6 +109,8 @@ class IntentConfig(BaseModel):
     ] = "push_factor"
     country: str = ""
     country_code: str = ""
+    target_country: str = ""
+    target_country_code: str = ""
     year_from: int = 2010
     year_to: int = 2023
     weights: dict[str, float] = Field(
@@ -104,10 +118,25 @@ class IntentConfig(BaseModel):
             "aqi": 0.4,
             "healthcare": 0.35,
             "education": 0.25,
+            "safety": 0.3,
             "cost_of_living": 0.0,
         }
     )
     api_priority: list[str] = Field(default_factory=list)
+
+
+class ToolSelection(BaseModel):
+    """Smart router decision: which tools to call based on query analysis."""
+    model_config = ConfigDict(extra="ignore")
+    
+    worldbank: bool = True
+    acled: bool = False
+    teleport: bool = True
+    news: bool = False
+    climate: bool = True
+    employment: bool = False
+    aqi: bool = True
+    reasoning: str = ""
 
 
 class MigrationDataset(BaseModel):
@@ -115,10 +144,11 @@ class MigrationDataset(BaseModel):
 
     country: str = ""
     country_code: str = ""
+    target_country: str = ""
+    target_country_code: str = ""
     year_from: int = 2010
     year_to: int = 2023
     intent: str = "push_factor"
-    displacement: list[dict[str, Any]] = Field(default_factory=list)
     destinations: list[dict[str, Any]] = Field(default_factory=list)
     worldbank: list[dict[str, Any]] = Field(default_factory=list)
     conflict_events: list[dict[str, Any]] = Field(default_factory=list)
@@ -130,6 +160,9 @@ class MigrationDataset(BaseModel):
     aqi: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     data_freshness: dict[str, str] = Field(default_factory=dict)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    top_headline: str | None = None
+    missing_reasons: list[str] = Field(default_factory=list)
 
 
 class PushFactorResult(BaseModel):
@@ -162,12 +195,86 @@ class RelocationRow(BaseModel):
     pm25: float | None = None
     healthcare_signal: float | None = None
     education_signal: float | None = None
+    safety_signal: float | None = None
+    cost_of_living_signal: float | None = None
+    salary_signal: float | None = None
 
 
 class RelocationResult(BaseModel):
     active: bool = False
     top_countries: list[RelocationRow] = Field(default_factory=list)
     narrative: str = ""
+
+
+class ToolSelectorOutput(BaseModel):
+    """LLM output: which tools to call and which countries to compare."""
+    model_config = ConfigDict(extra="ignore")
+
+    selected_tools: list[str] = Field(default_factory=list)
+    countries: list[str] = Field(default_factory=list)
+    country_codes: list[str] = Field(default_factory=list)
+    country_strategy: str = "mixed"
+    k: int = 5
+    query_focus: str = ""
+    year_from: int = 2015
+    year_to: int = 2023
+    reasoning: str = ""
+    proxy_note: str = ""        # set when niche topic uses proxy indicators
+    in_scope: bool = True       # False = query has no country/migration relevance
+    out_of_scope_reason: str = ""  # human-readable explanation when in_scope=False
+    worldbank_indicators: list[str] = Field(default_factory=list)  # specific WB indicators for this query
+
+
+class Evidence(BaseModel):
+    """A single LLM-generated evidence insight backed by collected data."""
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = ""
+    value: str = ""
+    data_source: str = ""
+    description: str = ""
+    confidence: int = 50  # 0-100; assigned by LLM based on data completeness & recency
+
+
+class HypothesisInsight(BaseModel):
+    """A structured hypothesis grounded in EDA data with competing explanations."""
+    model_config = ConfigDict(extra="ignore")
+
+    headline: str = ""
+    # 2-3 sentence summary with specific numbers
+    summary: str = ""
+    # The single anchoring data point (e.g. "GDP growth 1.8%, 2022")
+    key_metric: str = ""
+    # Explicit chain of reasoning from data → conclusion
+    reasoning: str = ""
+    # List of specific data points supporting the hypothesis (with values + years)
+    evidence_for: list[str] = Field(default_factory=list)
+    # Data points that complicate or challenge the hypothesis
+    evidence_against: list[str] = Field(default_factory=list)
+    # Alternative explanation the data could support
+    competing_hypothesis: str = ""
+    # Why the primary hypothesis is more supported than the alternative
+    competing_verdict: str = ""
+    data_source: str = ""
+    confidence: int = 50
+
+
+class CountryComparisonResult(BaseModel):
+    """Final result of the country comparison pipeline."""
+    model_config = ConfigDict(extra="ignore")
+
+    query: str = ""
+    countries: list[str] = Field(default_factory=list)
+    country_codes: list[str] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    hypotheses: list[HypothesisInsight] = Field(default_factory=list)
+    summary: str = ""
+    chart_jsons: list[str] = Field(default_factory=list)
+    query_focus: str = ""
+    year_from: int = 2015
+    year_to: int = 2023
+    # Total data rows returned per tool across all countries (0 = tool returned nothing)
+    tool_stats: dict[str, int] = Field(default_factory=dict)
 
 
 class HypothesisReport(BaseModel):
