@@ -1,6 +1,8 @@
 .env
 .venv/
 venv/
+.cache/
+.claude
 __pycache__/
 *.py[cod]
 *.duckdb
