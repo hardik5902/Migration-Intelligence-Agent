@@ -55,8 +55,13 @@ Rules:
   - "mixed": some countries are named, but broad candidate suggestions are useful
   - "high_coverage_defaults": the query is broad and should use strong
     public-data-coverage defaults
-- If the query is broad, prefer high-coverage countries such as Germany, Canada,
-  Australia, Netherlands, and Sweden unless the topic suggests a different pool.
+- Select countries that BEST MATCH the specific criteria in the query.
+  For example: "high GDP" → top GDP-per-capita nations (Switzerland, Norway,
+  Singapore, USA, Ireland, Denmark); "low conflict" → peaceful nations (Iceland,
+  New Zealand, Austria, Portugal); "clean air" → lowest PM2.5 countries (Finland,
+  Sweden, Iceland, New Zealand, Canada); "high infrastructure" → Singapore, Japan,
+  Switzerland, Netherlands, Denmark. Pick the globally most relevant countries
+  for the stated criteria — do NOT default to the same list every time.
 - `worldbank_indicators` must contain only indicators directly relevant to the query.
 - Return only JSON, with no markdown.
 
@@ -73,8 +78,8 @@ For in-scope queries, return:
   "in_scope": true,
   "out_of_scope_reason": "",
   "selected_tools": ["worldbank", "teleport", "employment"],
-  "countries": ["Germany", "Canada", "Australia", "Netherlands", "Sweden"],
-  "country_codes": ["DEU", "CAN", "AUS", "NLD", "SWE"],
+  "countries": ["Switzerland", "Norway", "Singapore", "Denmark", "New Zealand"],
+  "country_codes": ["CHE", "NOR", "SGP", "DNK", "NZL"],
   "country_strategy": "high_coverage_defaults",
   "k": 5,
   "query_focus": "Compare healthcare and education for migration decisions",

@@ -288,7 +288,6 @@ def cache_viewer() -> str:
             except Exception:
                 pass
 
-        con.close()
         error = None
     except Exception as exc:
         tables_info = []
@@ -313,7 +312,6 @@ def cache_clear() -> Response:
         for table in _ALLOWED_TABLES:
             con.execute(f"DELETE FROM {table}")
         con.execute("DELETE FROM cache_meta")
-        con.close()
     except Exception:
         pass
     return redirect(url_for("cache_viewer"))

@@ -53,17 +53,27 @@ TOOL_DATA_KEYS: dict[str, list[str]] = {
 
 
 HIGH_COVERAGE_DEFAULTS: list[str] = [
+    "CHE",
+    "NOR",
+    "SGP",
+    "DNK",
+    "NZL",
     "DEU",
     "CAN",
     "AUS",
     "NLD",
     "SWE",
+    "FIN",
+    "AUT",
+    "JPN",
+    "IRL",
+    "GBR",
 ]
 
 
 TOOL_DEFAULT_COUNTRY_POOLS: dict[str, list[str]] = {
-    "acled": ["DEU", "CAN", "SWE", "NLD", "AUS"],
-    "environment": ["CAN", "NZL", "SWE", "FIN", "AUS"],
-    "employment": ["DEU", "CAN", "NLD", "SWE", "AUS"],
-    "news": ["DEU", "CAN", "USA", "GBR", "AUS"],
+    "acled":       ["NOR", "CHE", "NZL", "DNK", "AUT", "DEU", "CAN", "SWE", "NLD", "AUS"],
+    "environment": ["FIN", "NZL", "NOR", "ISL", "SWE", "CHE", "CAN", "AUS"],
+    "employment":  ["NOR", "CHE", "DEU", "DNK", "NLD", "AUT", "SWE", "CAN", "AUS"],
+    "news":        ["GBR", "DEU", "CAN", "USA", "AUS", "SGP", "NZL"],
 }

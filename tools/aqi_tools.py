@@ -345,19 +345,20 @@ async def get_aqi_by_country(
     c = client or httpx.AsyncClient(timeout=12.0)
 
     try:
-        wb_rows, wb_url = await _fetch_worldbank_pm25(country_iso3, c)
-
         iso2 = _iso3_to_iso2(country_iso3)
-        oaq_rows: list[dict[str, Any]] = []
-        oaq_url = OPENAQ_LATEST_URL
-
         if iso2:
-            oaq_rows, oaq_url = await _fetch_openaq_v3(iso2, top_n, c)
+            # Fetch both sources in parallel instead of sequentially
+            (wb_rows, wb_url), (oaq_rows, oaq_url) = await asyncio.gather(
+                _fetch_worldbank_pm25(country_iso3, c),
+                _fetch_openaq_v3(iso2, top_n, c),
+            )
         else:
             logger.warning(
                 f"[AQI] No ISO2 mapping for '{country_iso3}'. "
                 f"Add it to _ISO3_TO_ISO2 in aqi_tools.py to enable OpenAQ data."
             )
+            wb_rows, wb_url = await _fetch_worldbank_pm25(country_iso3, c)
+            oaq_rows, oaq_url = [], OPENAQ_LATEST_URL
 
         if wb_rows:
             # World Bank is primary — append OpenAQ as supplementary recent readings
