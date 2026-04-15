@@ -2,7 +2,7 @@
 
 **Live demo:** https://migration-intelligence-agent-1008110254578.us-central1.run.app/
 
-A **multi-agent data analysis system** built on **Google ADK + Gemini** that performs a complete analyst workflow — collect live data, explore it statistically, and form evidence-backed hypotheses — for any country comparison question.
+A **multi-agent data analysis system** built on **Google ADK + Gemini** that performs a complete analyst workflow, collects live data, explores it statistically, and forms evidence-backed hypotheses.
 
 ---
 
@@ -16,7 +16,22 @@ Ask a question like *"Which countries have the best quality of life for migrants
 4. **Builds 4 comparison charts + 4 EDA charts** — Plotly visuals selected by a second LLM call grounded in EDA findings
 5. **Delivers 3 data-grounded hypotheses** — each cites specific numbers, tests a competing explanation, and carries a confidence score
 
-Everything streams progressively to the browser via Server-Sent Events.
+
+---
+---
+
+
+## Example queries
+
+| Category | Query |
+|----------|-------|
+| Quality of life | *"Which 5 countries have the best quality of life for migrants?"* |
+| Economic | *"Compare GDP growth and inflation in Germany, Canada and Australia"* |
+| Healthcare | *"Top 3 countries with highest healthcare spending and best life expectancy"* |
+| Environment | *"Countries with the cleanest air and lowest CO2 emissions"* |
+| Safety | *"Safest countries with lowest conflict events for relocation"* |
+| Infrastructure | *"Best countries for internet access and electricity infrastructure"* |
+| Labour | *"Where is youth unemployment lowest in Europe?"* |
 
 ---
 
@@ -24,9 +39,8 @@ Everything streams progressively to the browser via Server-Sent Events.
 
 ### Step 1 — Collect
 
-**Where:** `agents/scout_service.py` → `collect_migration_dataset()`, called from `agents/data_collector.py` → `collect_data_for_countries()`
 
-The `DataCollectorADKAgent` (`agents/adk_agents.py`) runs **K countries in parallel** via `asyncio.gather`. For each country, `collect_migration_dataset` fans out across **up to 6 live external APIs simultaneously**:
+The `DataCollectorADKAgent`  runs **K countries in parallel**. For each country, fans out across **up to 6 live external APIs simultaneously**:
 
 | Tool | Source | Data |
 |------|--------|------|
@@ -37,15 +51,14 @@ The `DataCollectorADKAgent` (`agents/adk_agents.py`) runs **K countries in paral
 | `teleport_tools.get_city_scores()` | Teleport API (World Bank composite) | Quality-of-life scores across 17 categories |
 | `news_tools.get_country_news()` + `get_gdelt_sentiment()` | NewsAPI + GDELT | Recent headlines + sentiment score |
 
-All fetched data is stored in a **local DuckDB file** (`cache/migration_intel.duckdb`) with per-table TTLs (1h news → 7d climate). On the next query for the same country/period, the cache is read via **SQL** (`tools/duckdb_tools.py` → `run_sql_query()`) instead of hitting the API again.
+All fetched data is stored in a **local DuckDB file** (`cache/migration_intel.duckdb`) with per-table TTLs (1h news → 7d climate). 
+On the next query for the same country/period, the cache is read via **SQL** instead of hitting the API again.
 
-The LLM first determines which tools are relevant (`ToolSelectorADKAgent` → `agents/tool_selector.py` → `analyze_query_with_llm()`), so a healthcare query does not trigger ACLED and a conflict query does not trigger Teleport.
+The LLM first determines which tools are relevant, so a healthcare query does not trigger ACLED and a conflict query does not trigger Teleport.
 
 ### Step 2 — Explore and Analyse (EDA)
 
-**Where:** `agents/adk_agents.py` → `EDAAnalystADKAgent._run_async_impl()`, delegating to `agents/eda_analyst.py` → `run_eda()`
-
-The EDA agent is **pure Python — no LLM**. It runs four statistical passes over the collected data:
+The EDA agent  runs four statistical passes over the collected data:
 
 | Method | File / Function | What it surfaces |
 |--------|----------------|-----------------|
@@ -184,59 +197,7 @@ adk web   # from the project root, uses agent.py → root_agent
 uv run python main.py query "Compare healthcare in Germany, Japan and Canada"
 ```
 
----
 
-## Deployment
-
-The app is deployed on **Google Cloud Run** via Docker + Cloud Build.
-
-```bash
-gcloud builds submit --config cloudbuild.yaml
-```
-
-`cloudbuild.yaml` builds the Docker image, pushes to Container Registry, and deploys to Cloud Run (`us-central1`, port 8080, unauthenticated).
-
----
-
-## Project Requirements Mapping
-
-### Required
-
-| Requirement | Implementation | File + Function |
-|-------------|---------------|-----------------|
-| **Frontend** | Flask app with progressive SSE streaming, Plotly charts, EDA cards, hypothesis report | `app.py` → `index()`, `analyze()` · `templates/index.html` · `static/styles.css` |
-| **Agent framework** | Google ADK `SequentialAgent` + 4 `BaseAgent` subclasses | `agents/adk_agents.py` → `build_country_comparison_pipeline()` · `agents/country_pipeline.py` → `run_country_pipeline_streaming()` |
-| **Tool calling** | 6 live API tools called at runtime; 3 EDA tool functions called over collected data | `agents/scout_service.py` → `collect_migration_dataset()` · `agents/eda_analyst.py` → `run_eda()` |
-| **Non-trivial dataset** | World Bank 25-indicator time series (1990–2024), Open-Meteo daily climate archive, ACLED conflict events, ILOSTAT employment, NewsAPI + GDELT — all fetched live, never hard-coded | `tools/worldbank_tools.py`, `tools/environment_tools.py`, `tools/acled_tools.py`, `tools/employment_tools.py`, `tools/news_tools.py` |
-| **Multi-agent pattern** | ADK `SequentialAgent` orchestrating 4 specialised `BaseAgent`s; fan-out parallel collection across K countries; session state as typed data bus | `agents/adk_agents.py` → `ToolSelectorADKAgent`, `DataCollectorADKAgent`, `EDAAnalystADKAgent`, `UnifiedAnalysisADKAgent` |
-| **Deployed** | Google Cloud Run via Dockerfile + Cloud Build CI/CD | `Dockerfile` · `cloudbuild.yaml` |
-| **README** | This file | `README.md` |
-
-### Grab-Bag (implemented: 5 of 7)
-
-| Concept | Implementation | File + Function |
-|---------|---------------|-----------------|
-| **Structured output** | Both LLM calls use `response_mime_type="application/json"` + Pydantic model validation. `ToolSelectorOutput` enforces tool selection schema. `HypothesisInsight` enforces hypothesis format with confidence, evidence arrays, competing hypothesis. | `models/schemas.py` · `agents/tool_selector.py` → `analyze_query_with_llm()` · `agents/analysis_agent.py` → `run_unified_analysis()` |
-| **Data visualisation** | 4 country-comparison Plotly charts (line, bar, scatter, area) + 4 EDA-specific charts (correlation heatmap, CAGR bar, anomaly timeline, distribution box). All rendered in-browser via Plotly.js. | `analysis/country_charts.py` → `build_country_comparison_charts()` · `analysis/eda_charts.py` → `build_eda_charts()` |
-| **Parallel execution** | Three layers of parallelism: (1) K countries collected simultaneously, (2) 6 API tools per country run concurrently, (3) 25 World Bank indicators fetched in parallel (rate-limited to 10 concurrent via semaphore). | `agents/data_collector.py` → `collect_data_for_countries()` · `agents/scout_service.py` → `collect_migration_dataset()` · `tools/worldbank_tools.py` → `fetch_macro_bundle()` |
-| **Code execution** | Python pandas/numpy/scipy/scikit-learn computations at runtime: CAGR calculation, Pearson/Spearman correlation matrices, z-score anomaly detection, cosine similarity for country comparison, statistical summary (mean ± σ, quartiles). | `analysis/correlation.py` → `run_correlation_analysis()`, `run_growth_rate()` · `analysis/stats_tools.py` → `run_anomaly_detect()` · `agents/eda_analyst.py` → `run_eda()` |
-| **Second data retrieval method** | API integration (6 live REST APIs) **+** SQL composition (DuckDB SQL queries dynamically composed and executed against the local cache for cache reads and EDA queries). | `tools/duckdb_tools.py` → `run_sql_query()`, `should_use_cache()` · `agents/scout_service.py` → cache-read branches |
-
----
-
-## Example queries
-
-| Category | Query |
-|----------|-------|
-| Quality of life | *"Which 5 countries have the best quality of life for migrants?"* |
-| Economic | *"Compare GDP growth and inflation in Germany, Canada and Australia"* |
-| Healthcare | *"Top 3 countries with highest healthcare spending and best life expectancy"* |
-| Environment | *"Countries with the cleanest air and lowest CO2 emissions"* |
-| Safety | *"Safest countries with lowest conflict events for relocation"* |
-| Infrastructure | *"Best countries for internet access and electricity infrastructure"* |
-| Labour | *"Where is youth unemployment lowest in Europe?"* |
-
----
 
 ## Data & cache
 
@@ -254,17 +215,6 @@ gcloud builds submit --config cloudbuild.yaml
 | `conflict_events` | 4h | ACLED API |
 | `news_articles` | 1h | NewsAPI |
 
----
-
-## Tests
-
-```bash
-uv run pytest tests/
-```
-
-Test modules cover: `tool_selector`, `data_collector`, `eda_analyst`, `eda_charts`, `country_charts`, `query_guard`, `schemas`, `pipeline_config`, `country_codes`.
-
----
 
 ## License
 
