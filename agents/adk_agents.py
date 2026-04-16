@@ -1,27 +1,4 @@
-"""ADK BaseAgent implementations for the country comparison pipeline.
-
-Four agents run in sequence via ADK's SequentialAgent + Runner:
-  1. ToolSelectorADKAgent    — LLM picks tools + K countries
-  2. DataCollectorADKAgent   — parallel live-data fetch for every country
-  3. EDAAnalystADKAgent      — EDA stats + data-coverage report + chart manifests
-  4. UnifiedAnalysisADKAgent — single LLM call: chart keys + hypotheses
-
-Session state is the data bus:
-  • user_query          (str)   — set before the runner starts
-  • selector_output     (dict)  — written by ToolSelectorADKAgent
-  • countries_data      (dict)  — written by DataCollectorADKAgent
-  • eda_findings        (dict)  — written by EDAAnalystADKAgent
-  • data_coverage       (dict)  — written by EDAAnalystADKAgent
-  • comparison_manifest (list)  — written by EDAAnalystADKAgent
-  • eda_chart_manifest  (list)  — written by EDAAnalystADKAgent
-  • charts              (list)  — written by UnifiedAnalysisADKAgent
-  • eda_charts          (list)  — written by UnifiedAnalysisADKAgent
-  • hypotheses          (list)  — written by UnifiedAnalysisADKAgent
-  • tool_stats          (dict)  — written by UnifiedAnalysisADKAgent
-
-The SSE emit callback and the query are stored in contextvars so every agent
-can access them without needing them threaded through constructors.
-"""
+"""ADK agents for the country comparison pipeline."""
 
 from __future__ import annotations
 
@@ -34,13 +11,21 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
+from plotly.io import from_json as _plotly_from_json
 from typing_extensions import override
 
-from agents.analysis_agent import build_data_coverage_report, run_unified_analysis
+from agents.analysis_agent import (
+    build_data_coverage_report,
+    validate_unified_analysis_output,
+)
 from agents.data_collector import collect_data_for_countries, filter_countries_by_coverage
 from agents.eda_analyst import run_eda
 from agents.pipeline_config import TOOL_DATA_KEYS
-from agents.tool_selector import analyze_query_with_llm
+from agents.pipeline_llm_agents import (
+    build_tool_selector_llm_agent,
+    build_unified_analysis_llm_agent,
+)
+from agents.tool_selector import normalize_tool_selector_output
 from analysis.country_charts import (
     build_country_comparison_charts,
     build_registry_manifest,
@@ -51,48 +36,77 @@ from analysis.eda_charts import (
     build_eda_charts,
     render_eda_charts_by_keys,
 )
-from models.schemas import ToolSelectorOutput
-
-
-# ---------------------------------------------------------------------------
-# Context vars — set once per pipeline run; readable by every agent coroutine
-# ---------------------------------------------------------------------------
+from models.schemas import ToolSelectorOutput, UnifiedAnalysisOutput
+from tools.artifact_store import read_json_artifact, write_json_artifact
 
 pipeline_emit: contextvars.ContextVar[Callable[[str, Any], None]] = (
     contextvars.ContextVar("pipeline_emit", default=lambda *_: None)
 )
-
 pipeline_query: contextvars.ContextVar[str] = (
     contextvars.ContextVar("pipeline_query", default="")
 )
 
 
 def _emit(name: str, data: Any) -> None:
-    """Convenience wrapper — calls whatever emit fn is active for this run."""
     pipeline_emit.get()(name, data)
 
 
-# ---------------------------------------------------------------------------
-# Agent 1 — Tool + country selection
-# ---------------------------------------------------------------------------
+def _store_state_artifact(session_id: str, name: str, payload: Any) -> str:
+    return write_json_artifact(session_id, name, payload)
 
-class ToolSelectorADKAgent(BaseAgent):
-    """Calls the LLM to pick tools + K countries; writes selector_output."""
+
+def _load_state_payload(
+    ctx: InvocationContext,
+    *,
+    key: str,
+    ref_key: str,
+    default: Any,
+) -> Any:
+    if ref := ctx.session.state.get(ref_key):
+        payload = read_json_artifact(str(ref))
+        if payload is not None:
+            return payload
+    return ctx.session.state.get(key, default)
+
+
+def _noop_event(ctx: InvocationContext, author: str) -> Event:
+    return Event(
+        invocation_id=ctx.invocation_id,
+        author=author,
+        branch=ctx.branch,
+        actions=EventActions(),
+    )
+
+
+class ToolSelectorStageADKAgent(BaseAgent):
+    """Emits the stage update before the selector LLM runs."""
 
     @override
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         _emit("stage", {
-            "step": 1, "total": 4,
+            "step": 1,
+            "total": 5,
             "label": "AI selects tools & countries",
-            "message": "Analysing your query…",
+            "message": "Analysing your query...",
         })
+        yield _noop_event(ctx, self.name)
 
+
+class ToolSelectorResultADKAgent(BaseAgent):
+    """Normalises structured selector output and emits the chosen scope."""
+
+    @override
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
         query = pipeline_query.get() or ctx.session.state.get("user_query", "")
-        selector = await analyze_query_with_llm(query)
+        selector = normalize_tool_selector_output(
+            query,
+            ctx.session.state.get("tool_selector_raw", {}),
+        )
 
-        # If LLM determined query is out of scope, stop the pipeline immediately
         if not selector.in_scope:
             _emit("out_of_scope", {
                 "reason": selector.out_of_scope_reason or (
@@ -104,57 +118,50 @@ class ToolSelectorADKAgent(BaseAgent):
                 invocation_id=ctx.invocation_id,
                 author=self.name,
                 branch=ctx.branch,
-                actions=EventActions(state_delta={"out_of_scope": True}),
+                actions=EventActions(
+                    state_delta={
+                        "out_of_scope": True,
+                        "selector_output": selector.model_dump(),
+                    }
+                ),
             )
             return
 
         _emit("selection", {
-            "countries":     selector.countries,
+            "countries": selector.countries,
             "country_codes": selector.country_codes,
-            "tools":         selector.selected_tools,
-            "year_from":     selector.year_from,
-            "year_to":       selector.year_to,
-            "query_focus":   selector.query_focus,
-            "proxy_note":    selector.proxy_note,
+            "tools": selector.selected_tools,
+            "year_from": selector.year_from,
+            "year_to": selector.year_to,
+            "query_focus": selector.query_focus,
+            "proxy_note": selector.proxy_note,
             "country_strategy": selector.country_strategy,
-            "k":             selector.k,
+            "k": selector.k,
         })
-
         yield Event(
             invocation_id=ctx.invocation_id,
             author=self.name,
             branch=ctx.branch,
-            actions=EventActions(
-                state_delta={"selector_output": selector.model_dump()}
-            ),
+            actions=EventActions(state_delta={"selector_output": selector.model_dump()}),
         )
 
 
-# ---------------------------------------------------------------------------
-# Agent 2 — Parallel data collection
-# ---------------------------------------------------------------------------
-
 class DataCollectorADKAgent(BaseAgent):
-    """Reads selector_output, fetches live data for all countries in parallel."""
+    """Reads selector_output, fetches live data, and stores bulky data as artifacts."""
 
     @override
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
         if ctx.session.state.get("out_of_scope"):
-            return  # pipeline was stopped by ToolSelectorADKAgent
+            return
 
-        selector = ToolSelectorOutput.model_validate(
-            ctx.session.state.get("selector_output", {})
-        )
-
+        selector = ToolSelectorOutput.model_validate(ctx.session.state.get("selector_output", {}))
         _emit("stage", {
-            "step": 2, "total": 4,
+            "step": 2,
+            "total": 5,
             "label": "Collecting live data",
-            "message": (
-                f"Fetching data for {len(selector.countries)} "
-                "countries in parallel…"
-            ),
+            "message": f"Fetching data for {len(selector.countries)} countries in parallel...",
         })
 
         countries_data = await collect_data_for_countries(
@@ -164,22 +171,24 @@ class DataCollectorADKAgent(BaseAgent):
             selector.year_from,
             selector.year_to,
         )
-
-        (
-            countries_data,
-            validated_countries,
-            validated_codes,
-            coverage_ranking,
-        ) = filter_countries_by_coverage(
-            countries_data,
-            selector.country_codes,
-            selector.selected_tools,
-            selector.k,
+        countries_data, validated_countries, validated_codes, coverage_ranking = (
+            filter_countries_by_coverage(
+                countries_data,
+                selector.country_codes,
+                selector.selected_tools,
+                selector.k,
+            )
         )
-
         selector.countries = validated_countries
         selector.country_codes = validated_codes
         selector.k = len(validated_countries)
+
+        countries_data_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "countries_data",
+            countries_data,
+        )
 
         _emit("selection", {
             "countries": selector.countries,
@@ -200,7 +209,7 @@ class DataCollectorADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "countries_data": countries_data,
+                    "countries_data_ref": countries_data_ref,
                     "selector_output": selector.model_dump(),
                     "coverage_ranking": coverage_ranking,
                 }
@@ -208,16 +217,8 @@ class DataCollectorADKAgent(BaseAgent):
         )
 
 
-# ---------------------------------------------------------------------------
-# Agent 3 — Exploratory Data Analysis
-# ---------------------------------------------------------------------------
-
 class EDAAnalystADKAgent(BaseAgent):
-    """Runs statistical EDA, builds data-coverage report + comparison/EDA chart manifests.
-
-    This agent is pure Python — no LLM calls. It prepares everything the
-    unified analysis agent needs in a single LLM request.
-    """
+    """Runs pure-Python EDA and stores large outputs as artifacts."""
 
     @override
     async def _run_async_impl(
@@ -226,18 +227,21 @@ class EDAAnalystADKAgent(BaseAgent):
         if ctx.session.state.get("out_of_scope"):
             return
 
-        selector = ToolSelectorOutput.model_validate(
-            ctx.session.state.get("selector_output", {})
+        selector = ToolSelectorOutput.model_validate(ctx.session.state.get("selector_output", {}))
+        countries_data = _load_state_payload(
+            ctx,
+            key="countries_data",
+            ref_key="countries_data_ref",
+            default={},
         )
-        countries_data: dict[str, Any] = ctx.session.state.get("countries_data", {})
 
         _emit("stage", {
-            "step": 3, "total": 5,
+            "step": 3,
+            "total": 5,
             "label": "Exploratory data analysis",
-            "message": "Running stats, decoding data coverage, building chart manifests…",
+            "message": "Running stats, decoding data coverage, building chart manifests...",
         })
 
-        # Pure-Python stats (CAGR / anomaly / correlation / summary)
         eda_findings = await asyncio.to_thread(
             run_eda,
             countries_data,
@@ -245,27 +249,46 @@ class EDAAnalystADKAgent(BaseAgent):
             selector.query_focus,
             selector.worldbank_indicators,
         )
-
-        # Data-coverage introspection: decode what columns came back per country
         data_coverage = await asyncio.to_thread(
             build_data_coverage_report,
             countries_data,
             selector.selected_tools,
         )
-
-        # Comparison chart manifest (from country_charts registry)
-        comparison_manifest = await asyncio.to_thread(
-            build_registry_manifest, countries_data
+        comparison_manifest = await asyncio.to_thread(build_registry_manifest, countries_data)
+        eda_chart_manifest = await asyncio.to_thread(
+            build_eda_chart_manifest,
+            eda_findings,
+            countries_data,
         )
 
-        # EDA chart manifest (which stat charts can actually render)
-        eda_chart_manifest = await asyncio.to_thread(
-            build_eda_chart_manifest, eda_findings, countries_data
+        eda_findings_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "eda_findings",
+            eda_findings,
+        )
+        data_coverage_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "data_coverage",
+            data_coverage,
+        )
+        comparison_manifest_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "comparison_manifest",
+            comparison_manifest,
+        )
+        eda_chart_manifest_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "eda_chart_manifest",
+            eda_chart_manifest,
         )
 
         _emit("eda", {
-            "findings":     eda_findings.get("findings", []),
-            "eda_charts":   [],  # charts come later via the 'eda_charts' event
+            "findings": eda_findings.get("findings", []),
+            "eda_charts": [],
             "correlations": eda_findings.get("correlations", []),
         })
 
@@ -275,21 +298,35 @@ class EDAAnalystADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "eda_findings":        eda_findings,
-                    "data_coverage":       data_coverage,
-                    "comparison_manifest": comparison_manifest,
-                    "eda_chart_manifest":  eda_chart_manifest,
+                    "eda_findings_ref": eda_findings_ref,
+                    "data_coverage_ref": data_coverage_ref,
+                    "comparison_manifest_ref": comparison_manifest_ref,
+                    "eda_chart_manifest_ref": eda_chart_manifest_ref,
                 }
             ),
         )
 
 
-# ---------------------------------------------------------------------------
-# Agent 4 — Unified analysis: single LLM call returns everything
-# ---------------------------------------------------------------------------
+class UnifiedAnalysisStageADKAgent(BaseAgent):
+    """Emits the stage update before the unified analysis LLM runs."""
+
+    @override
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        if ctx.session.state.get("out_of_scope"):
+            return
+        _emit("stage", {
+            "step": 4,
+            "total": 5,
+            "label": "Building charts & insights",
+            "message": "LLM is selecting charts and drafting hypotheses...",
+        })
+        yield _noop_event(ctx, self.name)
+
 
 class UnifiedAnalysisADKAgent(BaseAgent):
-    """Single LLM call: picks comparison charts, EDA charts, and writes hypotheses."""
+    """Validates structured LLM output, renders charts, and emits final results."""
 
     @override
     async def _run_async_impl(
@@ -298,43 +335,49 @@ class UnifiedAnalysisADKAgent(BaseAgent):
         if ctx.session.state.get("out_of_scope"):
             return
 
-        from plotly.io import from_json as _plotly_from_json
-
-        selector = ToolSelectorOutput.model_validate(
-            ctx.session.state.get("selector_output", {})
+        selector = ToolSelectorOutput.model_validate(ctx.session.state.get("selector_output", {}))
+        countries_data = _load_state_payload(
+            ctx,
+            key="countries_data",
+            ref_key="countries_data_ref",
+            default={},
         )
-        countries_data:      dict[str, Any]  = ctx.session.state.get("countries_data", {})
-        eda_findings:        dict[str, Any]  = ctx.session.state.get("eda_findings", {})
-        data_coverage:       dict[str, Any]  = ctx.session.state.get("data_coverage", {})
-        comparison_manifest: list[dict]      = ctx.session.state.get("comparison_manifest", [])
-        eda_chart_manifest:  list[dict]      = ctx.session.state.get("eda_chart_manifest", [])
-        query = pipeline_query.get() or ctx.session.state.get("user_query", "")
+        eda_findings = _load_state_payload(
+            ctx,
+            key="eda_findings",
+            ref_key="eda_findings_ref",
+            default={},
+        )
+        comparison_manifest = _load_state_payload(
+            ctx,
+            key="comparison_manifest",
+            ref_key="comparison_manifest_ref",
+            default=[],
+        )
+        eda_chart_manifest = _load_state_payload(
+            ctx,
+            key="eda_chart_manifest",
+            ref_key="eda_chart_manifest_ref",
+            default=[],
+        )
+        raw_output = UnifiedAnalysisOutput.model_validate(
+            ctx.session.state.get("unified_analysis_raw", {})
+        )
 
-        _emit("stage", {
-            "step": 4, "total": 5,
-            "label": "Building charts & insights",
-            "message": "Single LLM call: picking charts + writing hypotheses…",
-        })
-
-        # --- One LLM call: chart keys (comparison + EDA) + hypotheses ---
-        result = await run_unified_analysis(
-            query=query,
-            query_focus=selector.query_focus,
-            selected_tools=selector.selected_tools,
-            countries=selector.countries,
-            comparison_manifest=comparison_manifest,
+        result = validate_unified_analysis_output(
+            output=raw_output,
+            comparison_manifest=[
+                manifest
+                for manifest in comparison_manifest
+                if len(manifest.get("countries_with_data", [])) >= 2
+            ],
             eda_chart_manifest=eda_chart_manifest,
-            eda_findings=eda_findings,
-            data_coverage=data_coverage,
+            selected_tools=selector.selected_tools,
         )
-
         comparison_keys = result["comparison_chart_keys"]
-        eda_keys        = result["eda_chart_keys"]
-        hypotheses      = result["hypotheses"]
+        eda_keys = result["eda_chart_keys"]
+        hypotheses = result["hypotheses"]
 
-        # --- Render comparison charts ---
-        # Use LLM-selected keys if any were returned; fallback to heuristic only
-        # when the LLM returned zero valid keys.
         if comparison_keys:
             comp_chart_jsons = await asyncio.to_thread(
                 render_charts_by_keys,
@@ -343,7 +386,6 @@ class UnifiedAnalysisADKAgent(BaseAgent):
                 countries_data,
             )
         else:
-            # Heuristic fallback: query-relevance + coverage ranked selection
             comp_chart_jsons = await asyncio.to_thread(
                 build_country_comparison_charts,
                 countries_data,
@@ -352,7 +394,6 @@ class UnifiedAnalysisADKAgent(BaseAgent):
                 selector.worldbank_indicators,
             )
 
-        # --- Render EDA charts (up to 4) ---
         if eda_keys:
             eda_chart_jsons = await asyncio.to_thread(
                 render_eda_charts_by_keys,
@@ -361,7 +402,6 @@ class UnifiedAnalysisADKAgent(BaseAgent):
                 countries_data,
             )
         else:
-            # Fallback: heuristic picks up to 4 from the manifest
             eda_chart_jsons = await asyncio.to_thread(
                 build_eda_charts,
                 eda_findings,
@@ -369,48 +409,57 @@ class UnifiedAnalysisADKAgent(BaseAgent):
                 4,
             )
 
-        # Normalise Plotly JSON → dict for the browser
         def _jsons_to_dicts(chart_jsons: list[str]) -> list[Any]:
-            result: list[Any] = []
-            for j in chart_jsons:
+            result_dicts: list[Any] = []
+            for chart_json in chart_jsons:
                 try:
-                    result.append(_plotly_from_json(j).to_plotly_json())
+                    result_dicts.append(_plotly_from_json(chart_json).to_plotly_json())
                 except Exception:
                     pass
-            return result
+            return result_dicts
 
         comp_charts_normalized = _jsons_to_dicts(comp_chart_jsons)
-        eda_charts_normalized  = _jsons_to_dicts(eda_chart_jsons)
+        eda_charts_normalized = _jsons_to_dicts(eda_chart_jsons)
 
-        # Emit EDA charts (findings were emitted earlier by EDAAnalystADKAgent)
+        charts_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "charts",
+            comp_charts_normalized,
+        )
+        eda_charts_ref = await asyncio.to_thread(
+            _store_state_artifact,
+            ctx.session.id,
+            "eda_charts",
+            eda_charts_normalized,
+        )
+
         if eda_charts_normalized:
             _emit("eda_charts", {"eda_charts": eda_charts_normalized})
-
         _emit("charts", {"charts": comp_charts_normalized})
 
-        # Per-tool row counts for the status badges
         tool_stats: dict[str, int] = {
             tool: sum(
-                len(countries_data[country].get(k) or [])
+                len(countries_data[country].get(data_key) or [])
                 for country in countries_data
-                for k in TOOL_DATA_KEYS.get(tool, [tool])
+                for data_key in TOOL_DATA_KEYS.get(tool, [tool])
             )
             for tool in selector.selected_tools
         }
 
         _emit("stage", {
-            "step": 5, "total": 5,
+            "step": 5,
+            "total": 5,
             "label": "Finalising results",
-            "message": "Wrapping up…",
+            "message": "Wrapping up...",
         })
-
         _emit("evidence", {
-            "hypotheses":  [h.model_dump() for h in hypotheses],
-            "tool_stats":  tool_stats,
-            "countries":   selector.countries,
-            "tools_used":  selector.selected_tools,
-            "year_from":   selector.year_from,
-            "year_to":     selector.year_to,
+            "hypotheses": [hypothesis.model_dump() for hypothesis in hypotheses],
+            "tool_stats": tool_stats,
+            "countries": selector.countries,
+            "tools_used": selector.selected_tools,
+            "year_from": selector.year_from,
+            "year_to": selector.year_to,
             "query_focus": selector.query_focus,
         })
 
@@ -420,31 +469,32 @@ class UnifiedAnalysisADKAgent(BaseAgent):
             branch=ctx.branch,
             actions=EventActions(
                 state_delta={
-                    "charts":      comp_charts_normalized,
-                    "eda_charts":  eda_charts_normalized,
-                    "hypotheses":  [h.model_dump() for h in hypotheses],
-                    "tool_stats":  tool_stats,
+                    "charts_ref": charts_ref,
+                    "eda_charts_ref": eda_charts_ref,
+                    "hypotheses": [hypothesis.model_dump() for hypothesis in hypotheses],
+                    "tool_stats": tool_stats,
                 }
             ),
         )
 
 
-# ---------------------------------------------------------------------------
-# Pipeline factory
-# ---------------------------------------------------------------------------
-
 def build_country_comparison_pipeline() -> SequentialAgent:
-    """Assemble the three agents into an ADK SequentialAgent."""
+    """Assemble the country-comparison pipeline."""
     return SequentialAgent(
         name="country_comparison_pipeline",
         description=(
-            "Country comparison pipeline: "
-            "select tools → collect data → EDA → build charts + insights"
+            "Country comparison pipeline: select tools, collect data, run EDA, "
+            "then build charts and insights."
         ),
         sub_agents=[
-            ToolSelectorADKAgent(
-                name="tool_selector",
-                description="LLM selects relevant tools and K countries for the query.",
+            ToolSelectorStageADKAgent(
+                name="tool_selector_stage",
+                description="Emits the tool-selection stage update.",
+            ),
+            build_tool_selector_llm_agent(),
+            ToolSelectorResultADKAgent(
+                name="tool_selector_result",
+                description="Normalises the selector output and emits the chosen scope.",
             ),
             DataCollectorADKAgent(
                 name="data_collector",
@@ -452,17 +502,16 @@ def build_country_comparison_pipeline() -> SequentialAgent:
             ),
             EDAAnalystADKAgent(
                 name="eda_analyst",
-                description=(
-                    "Runs statistical EDA: growth rates (CAGR), anomaly detection, "
-                    "and cross-country correlations. Stores eda_findings + eda_charts."
-                ),
+                description="Runs statistical EDA and stores artifacts for downstream analysis.",
             ),
+            UnifiedAnalysisStageADKAgent(
+                name="unified_analysis_stage",
+                description="Emits the unified-analysis stage update.",
+            ),
+            build_unified_analysis_llm_agent(),
             UnifiedAnalysisADKAgent(
                 name="unified_analysis",
-                description=(
-                    "Single LLM call: picks comparison charts, EDA charts, "
-                    "and writes 3 hypotheses from data coverage + EDA findings."
-                ),
+                description="Validates structured output, renders charts, and emits final results.",
             ),
         ],
     )

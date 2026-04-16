@@ -198,7 +198,10 @@ Recommended Cloud Build trigger settings:
 - Branch: `^fb_hardik$`
 - Build config: `cloudbuild.fb_hardik.yaml`
 - Service name: `migration-intel-fb`
-- Image name: `gcr.io/$PROJECT_ID/migration-intel-fb`
+- Image name: `${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/migration-intel-fb`
+- Optional shared cache: set `_CACHE_BUCKET` to a GCS bucket name
+- Optional artifact store: set `_ARTIFACT_BUCKET` to a GCS bucket name
+- Optional third-party secrets: set `_NEWS_API_SECRET`, `_OPENAQ_API_SECRET`, `_ACLED_USERNAME_SECRET`, `_ACLED_PASSWORD_SECRET`
 
 ### ADK dev UI (optional)
 

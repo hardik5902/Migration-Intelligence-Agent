@@ -21,7 +21,7 @@ import pandas as pd
 from google.genai import types
 
 from agents.tool_selector import get_genai_client
-from models.schemas import HypothesisInsight
+from models.schemas import HypothesisInsight, UnifiedAnalysisOutput
 
 
 # ---------------------------------------------------------------------------
@@ -456,4 +456,125 @@ async def run_unified_analysis(
         "comparison_chart_keys": comparison_keys,
         "eda_chart_keys":        eda_keys,
         "hypotheses":            hypotheses[:3],
+    }
+
+
+def build_unified_analysis_prompt(
+    *,
+    query: str,
+    query_focus: str,
+    selected_tools: list[str],
+    countries: list[str],
+    comparison_manifest: list[dict[str, Any]],
+    eda_chart_manifest: list[dict[str, Any]],
+    eda_findings: dict[str, Any],
+    data_coverage: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build the unified-analysis prompt plus the filtered manifests used for validation."""
+    comp_available = [
+        manifest
+        for manifest in comparison_manifest
+        if len(manifest.get("countries_with_data", [])) >= 2
+    ]
+    comp_safe = [
+        {key: value for key, value in manifest.items() if key in _COMPARISON_SEND_KEYS}
+        for manifest in comp_available
+    ]
+    eda_safe = [
+        {
+            "key": manifest["key"],
+            "title": manifest["title"],
+            "type": manifest["type"],
+            "description": manifest["description"],
+            "metric": manifest.get("metric"),
+            "applicable_countries": manifest.get("applicable_countries", []),
+        }
+        for manifest in eda_chart_manifest
+    ]
+
+    eda_summary = _build_eda_summary(eda_findings or {})
+    prompt_parts = [
+        f"USER QUERY: {query}",
+        f"QUERY FOCUS: {query_focus or query}",
+        f"COUNTRIES: {', '.join(countries)}",
+        f"SELECTED TOOLS: {', '.join(selected_tools)}",
+        "",
+        "=== DATA COVERAGE (what columns came back per country) ===",
+        json.dumps(data_coverage, indent=2),
+        "",
+        f"=== COMPARISON CHART MANIFEST ({len(comp_safe)} available) ===",
+        json.dumps(comp_safe, indent=2),
+        "",
+        f"=== EDA CHART MANIFEST ({len(eda_safe)} available) ===",
+        json.dumps(eda_safe, indent=2),
+        "",
+    ]
+    if eda_summary:
+        prompt_parts.extend(["=== EDA FINDINGS ===", eda_summary, ""])
+    prompt_parts.append(
+        "Return ONE JSON object with keys: comparison_chart_keys (4), "
+        "eda_chart_keys (<=4), hypotheses (exactly 3)."
+    )
+    return "\n".join(prompt_parts), comp_available, eda_safe
+
+
+def validate_unified_analysis_output(
+    *,
+    output: UnifiedAnalysisOutput | dict[str, Any],
+    comparison_manifest: list[dict[str, Any]],
+    eda_chart_manifest: list[dict[str, Any]],
+    selected_tools: list[str],
+) -> dict[str, Any]:
+    """Validate an LLM-produced unified-analysis payload against the manifests."""
+    parsed = UnifiedAnalysisOutput.model_validate(output)
+
+    comparison_keys: list[str] = []
+    eda_keys: list[str] = []
+    hypotheses = [HypothesisInsight.model_validate(h) for h in parsed.hypotheses[:3]]
+
+    valid_comp_keys = {manifest["key"]: manifest for manifest in comparison_manifest}
+    seen_comp_metrics: set[str] = set()
+    for key in parsed.comparison_chart_keys:
+        if key not in valid_comp_keys:
+            continue
+        entry = valid_comp_keys[key]
+        metric_id = entry.get("data_key") or key.rsplit("_", 1)[0]
+        if metric_id in seen_comp_metrics:
+            continue
+        seen_comp_metrics.add(metric_id)
+        comparison_keys.append(key)
+        if len(comparison_keys) >= 4:
+            break
+
+    valid_eda_keys = {manifest["key"]: manifest for manifest in eda_chart_manifest}
+    seen_eda_metrics: set[str] = set()
+    for key in parsed.eda_chart_keys:
+        if key not in valid_eda_keys:
+            continue
+        entry = valid_eda_keys[key]
+        metric = entry.get("metric") or key.split(":", 1)[-1]
+        if metric in seen_comp_metrics or metric in seen_eda_metrics:
+            continue
+        seen_eda_metrics.add(metric)
+        eda_keys.append(key)
+        if len(eda_keys) >= 4:
+            break
+
+    while len(hypotheses) < 3:
+        hypotheses.append(HypothesisInsight(
+            headline="Insufficient data for this dimension",
+            summary="Insufficient data returned - expand year range or add tools.",
+            key_metric="N/A",
+            evidence_for=["Partial dataset returned"],
+            evidence_against=["Caveat: cannot confirm without more data"],
+            competing_hypothesis="",
+            competing_verdict="",
+            data_source=selected_tools[0] if selected_tools else "N/A",
+            confidence=25,
+        ))
+
+    return {
+        "comparison_chart_keys": comparison_keys,
+        "eda_chart_keys": eda_keys,
+        "hypotheses": hypotheses[:3],
     }

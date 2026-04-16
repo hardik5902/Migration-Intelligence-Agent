@@ -259,6 +259,15 @@ class HypothesisInsight(BaseModel):
     confidence: int = 50
 
 
+class UnifiedAnalysisOutput(BaseModel):
+    """Structured LLM output for chart selection and hypotheses."""
+    model_config = ConfigDict(extra="ignore")
+
+    comparison_chart_keys: list[str] = Field(default_factory=list)
+    eda_chart_keys: list[str] = Field(default_factory=list)
+    hypotheses: list[HypothesisInsight] = Field(default_factory=list)
+
+
 class CountryComparisonResult(BaseModel):
     """Final result of the country comparison pipeline."""
     model_config = ConfigDict(extra="ignore")

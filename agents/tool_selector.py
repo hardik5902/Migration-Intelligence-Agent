@@ -213,15 +213,28 @@ def _resolve_candidate_countries(
     return selector
 
 
-async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
-    """Call the LLM to scope the query, pick tools, and propose candidates."""
-    client = get_genai_client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
-    prompt = (
+def build_tool_selector_prompt(query: str) -> str:
+    return (
         f"Query: {query}\n\n"
         "Analyse this query: determine if it is in scope, select the appropriate "
         "tools, propose candidate countries, and identify any proxy indicators needed."
     )
+
+
+def normalize_tool_selector_output(query: str, raw: ToolSelectorOutput | dict[str, object]) -> ToolSelectorOutput:
+    result = ToolSelectorOutput.model_validate(raw)
+    if result.in_scope:
+        return _resolve_candidate_countries(query, result)
+    result.countries = []
+    result.country_codes = []
+    return result
+
+
+async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
+    """Call the LLM to scope the query, pick tools, and propose candidates."""
+    client = get_genai_client()
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
+    prompt = build_tool_selector_prompt(query)
 
     try:
         response = await client.aio.models.generate_content(
@@ -234,15 +247,7 @@ async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
             ),
         )
         raw = json.loads(response.text)
-        result = ToolSelectorOutput.model_validate(raw)
-
-        if result.in_scope:
-            result = _resolve_candidate_countries(query, result)
-        else:
-            result.countries = []
-            result.country_codes = []
-
-        return result
+        return normalize_tool_selector_output(query, raw)
 
     except Exception as exc:
         raise RuntimeError(

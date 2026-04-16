@@ -42,6 +42,7 @@ from agents.adk_agents import (
 )
 from agents.progress_tracker import reset_tracker
 from models.schemas import CountryComparisonResult, HypothesisInsight
+from tools.artifact_store import read_json_artifact
 
 _APP_NAME = "migration_intel"
 _USER_ID = "web_user"
@@ -131,8 +132,12 @@ async def run_country_pipeline(query: str) -> CountryComparisonResult:
     hypotheses_raw = state.get("hypotheses") or []
     chart_jsons: list[str] = []
 
+    chart_payload = state.get("charts") or []
+    if state.get("charts_ref"):
+        chart_payload = read_json_artifact(str(state["charts_ref"])) or []
+
     # Re-serialise charts to JSON strings for CountryComparisonResult.chart_jsons
-    for chart_dict in (state.get("charts") or []):
+    for chart_dict in chart_payload:
         try:
             chart_jsons.append(_json.dumps(chart_dict))
         except Exception:

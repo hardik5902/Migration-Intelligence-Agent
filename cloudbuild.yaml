@@ -1,17 +1,94 @@
+substitutions:
+  _SERVICE_NAME: migration-intelligence-agent
+  _IMAGE_NAME: migration-intelligence-agent
+  _REGION: us-central1
+  _AR_REPO: migration-intel
+  _MIN_INSTANCES: '0'
+  _MAX_INSTANCES: '4'
+  _CONCURRENCY: '2'
+  _MEMORY: 2Gi
+  _CPU: '2'
+  _GEMINI_MODEL: gemini-2.5-pro
+  _ARTIFACT_BUCKET: ''
+  _ARTIFACT_PREFIX: migration-intel
+  _CACHE_BUCKET: ''
+  _CACHE_PREFIX: migration-intel-cache
+  _SERVICE_ACCOUNT: ''
+  _NEWS_API_SECRET: ''
+  _OPENAQ_API_SECRET: ''
+  _ACLED_USERNAME_SECRET: ''
+  _ACLED_PASSWORD_SECRET: ''
+
+options:
+  substitutionOption: ALLOW_LOOSE
+
 steps:
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/migration-intelligence-agent', '.']
-
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', 'gcr.io/$PROJECT_ID/migration-intelligence-agent']
-
-- name: 'gcr.io/cloud-builders/gcloud'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  entrypoint: 'bash'
   args:
-  - 'run'
-  - 'deploy'
-  - 'migration-intelligence-agent'
-  - '--image=gcr.io/$PROJECT_ID/migration-intelligence-agent'
-  - '--region=us-central1'
-  - '--allow-unauthenticated'
-  - '--port=8080'
-  - '--timeout=300'
+  - '-ceu'
+  - |
+    gcloud artifacts repositories describe "${_AR_REPO}" --location="${_REGION}" >/dev/null 2>&1 || \
+    gcloud artifacts repositories create "${_AR_REPO}" \
+      --repository-format=docker \
+      --location="${_REGION}" \
+      --description="Migration Intelligence container images"
+
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'build'
+  - '-t'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:$BUILD_ID'
+  - '-t'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:latest'
+  - '.'
+
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'push'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:$BUILD_ID'
+
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - 'push'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:latest'
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  entrypoint: 'bash'
+  args:
+  - '-ceu'
+  - |
+    IMAGE_URI="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:$BUILD_ID"
+    ENV_VARS="GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION},GEMINI_MODEL=${_GEMINI_MODEL},ARTIFACT_BUCKET=${_ARTIFACT_BUCKET},ARTIFACT_PREFIX=${_ARTIFACT_PREFIX},CACHE_BUCKET=${_CACHE_BUCKET},CACHE_PREFIX=${_CACHE_PREFIX}"
+    CMD=(
+      gcloud run deploy "${_SERVICE_NAME}"
+      --image "${IMAGE_URI}"
+      --region "${_REGION}"
+      --allow-unauthenticated
+      --ingress all
+      --execution-environment gen2
+      --min-instances "${_MIN_INSTANCES}"
+      --max-instances "${_MAX_INSTANCES}"
+      --concurrency "${_CONCURRENCY}"
+      --memory "${_MEMORY}"
+      --cpu "${_CPU}"
+      --set-env-vars "${ENV_VARS}"
+      --port 8080
+      --timeout 300
+    )
+    if [[ -n "${_SERVICE_ACCOUNT}" ]]; then
+      CMD+=(--service-account "${_SERVICE_ACCOUNT}")
+    fi
+    SECRETS=()
+    [[ -n "${_NEWS_API_SECRET}" ]] && SECRETS+=("NEWS_API_KEY=${_NEWS_API_SECRET}")
+    [[ -n "${_OPENAQ_API_SECRET}" ]] && SECRETS+=("OPENAQ_API_KEY=${_OPENAQ_API_SECRET}")
+    [[ -n "${_ACLED_USERNAME_SECRET}" ]] && SECRETS+=("ACLED_USERNAME=${_ACLED_USERNAME_SECRET}")
+    [[ -n "${_ACLED_PASSWORD_SECRET}" ]] && SECRETS+=("ACLED_PASSWORD=${_ACLED_PASSWORD_SECRET}")
+    if (( ${#SECRETS[@]} )); then
+      SECRETS_CSV=$(IFS=,; echo "${SECRETS[*]}")
+      CMD+=(--update-secrets "${SECRETS_CSV}")
+    fi
+    "${CMD[@]}"
+
+images:
+- '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE_NAME}:$BUILD_ID'
