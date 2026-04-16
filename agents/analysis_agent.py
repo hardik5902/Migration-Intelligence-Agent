@@ -325,7 +325,7 @@ async def run_unified_analysis(
       - hypotheses            : list[HypothesisInsight] (3 items — padded if LLM returns fewer)
     """
     client = get_genai_client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 
     # Only expose comparison charts that have data for ≥2 countries
     comp_available = [
@@ -387,7 +387,6 @@ async def run_unified_analysis(
                 system_instruction=UNIFIED_ANALYSIS_INSTRUCTION,
                 response_mime_type="application/json",
                 temperature=0.2,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         raw = json.loads(response.text)

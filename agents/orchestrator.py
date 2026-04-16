@@ -20,7 +20,7 @@ from models.schemas import IntentConfig
 def build_root_agent() -> SequentialAgent:
     intent_classifier = Agent(
         name="intent_classifier",
-        model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        model=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro"),
         instruction=INTENT_CLASSIFIER_INSTRUCTION,
         output_schema=IntentConfig,
         output_key="intent_config",

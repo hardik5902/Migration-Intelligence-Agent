@@ -216,7 +216,7 @@ def _resolve_candidate_countries(
 async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
     """Call the LLM to scope the query, pick tools, and propose candidates."""
     client = get_genai_client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
     prompt = (
         f"Query: {query}\n\n"
         "Analyse this query: determine if it is in scope, select the appropriate "
@@ -231,7 +231,6 @@ async def analyze_query_with_llm(query: str) -> ToolSelectorOutput:
                 system_instruction=TOOL_SELECTOR_INSTRUCTION,
                 response_mime_type="application/json",
                 temperature=0.1,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         raw = json.loads(response.text)

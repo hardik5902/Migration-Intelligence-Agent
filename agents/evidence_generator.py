@@ -313,7 +313,7 @@ async def generate_hypotheses(
     and competing hypotheses — meeting the professor's requirements for Step 3.
     """
     client = get_genai_client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 
     data_summary = _build_data_summary(countries_data, selected_tools)
     eda_summary  = _build_eda_summary(eda_findings or {})
@@ -342,7 +342,6 @@ async def generate_hypotheses(
                 system_instruction=HYPOTHESIS_INSTRUCTION,
                 response_mime_type="application/json",
                 temperature=0.2,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         raw = json.loads(response.text)

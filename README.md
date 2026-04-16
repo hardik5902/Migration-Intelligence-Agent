@@ -185,6 +185,21 @@ uv run python main.py web
 
 Open **http://localhost:8080**
 
+### Branch deployment (`fb_hardik`)
+
+This branch can deploy independently from `main` by using the dedicated Cloud Build config:
+
+```bash
+gcloud builds submit --config cloudbuild.fb_hardik.yaml
+```
+
+Recommended Cloud Build trigger settings:
+
+- Branch: `^fb_hardik$`
+- Build config: `cloudbuild.fb_hardik.yaml`
+- Service name: `migration-intel-fb`
+- Image name: `gcr.io/$PROJECT_ID/migration-intel-fb`
+
 ### ADK dev UI (optional)
 
 ```bash

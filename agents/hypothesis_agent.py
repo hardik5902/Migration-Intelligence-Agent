@@ -9,7 +9,7 @@ from google.adk.agents.llm_agent import Agent
 from agents.prompts import HYPOTHESIS_INSTRUCTION
 from models.schemas import HypothesisReport
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 
 
 def build_hypothesis_agent() -> Agent:

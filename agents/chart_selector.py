@@ -65,7 +65,7 @@ async def select_charts_with_llm(
     fallback (heuristic sort) when an empty list is returned.
     """
     client = get_genai_client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 
     # Only expose charts that actually have data for ≥2 countries
     available = [m for m in manifest if len(m.get("countries_with_data", [])) >= 2]
@@ -97,7 +97,6 @@ async def select_charts_with_llm(
                 system_instruction=CHART_SELECTOR_INSTRUCTION,
                 response_mime_type="application/json",
                 temperature=0.1,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         raw = json.loads(response.text)
