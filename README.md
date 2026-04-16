@@ -4,6 +4,8 @@
 
 A **multi-agent data analysis system** built on **Google ADK + Gemini** that performs a complete analyst workflow, collects live data, explores it statistically, and forms evidence-backed hypotheses.
 
+Pro tip: The data by default gives from 2015 to 2024, but you can customise accordingly.
+
 ---
 
 ## What it does
